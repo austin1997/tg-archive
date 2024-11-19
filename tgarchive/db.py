@@ -7,8 +7,15 @@ from datetime import datetime
 import pytz
 from typing import Iterator
 
-schema = """
-CREATE table messages (
+create_chat_collection_schema = """
+CREATE table chat (
+    id INTEGER NOT NULL PRIMARY KEY,
+    title TEXT
+);
+"""
+
+create_chat_schema = """
+CREATE table IF NOT EXISTS ? (
     id INTEGER NOT NULL PRIMARY KEY,
     type TEXT NOT NULL,
     date TIMESTAMP NOT NULL,
@@ -20,7 +27,8 @@ CREATE table messages (
     FOREIGN KEY(user_id) REFERENCES users(id),
     FOREIGN KEY(media_id) REFERENCES media(id)
 );
-##
+"""
+create_user_schema = """
 CREATE table users (
     id INTEGER NOT NULL PRIMARY KEY,
     username TEXT,
@@ -29,7 +37,8 @@ CREATE table users (
     tags TEXT,
     avatar TEXT
 );
-##
+"""
+create_media_schema = """
 CREATE table media (
     id INTEGER NOT NULL PRIMARY KEY,
     type TEXT,
@@ -77,14 +86,23 @@ class DB:
             self.tz = pytz.timezone(tz)
 
         if is_new:
-            for s in schema.split("##"):
-                self.conn.cursor().execute(s)
-                self.conn.commit()
+            with self.conn:
+                self.conn.execute(create_media_schema)
+                self.conn.execute(create_user_schema)
+                self.conn.execute(create_chat_collection_schema)
 
     def _parse_date(self, d) -> str:
         return datetime.strptime(d, "%Y-%m-%dT%H:%M:%S%z")
+    
+    def create_chat_table(self, chat_id: int, title: str):
+        with self.conn:
+            self.conn.execute(create_chat_schema, chat_id)
+            self.conn.execute("""INSERT INTO chat (id, title)
+                VALUES(?, ?) ON CONFLICT (id)
+                DO UPDATE SET title=excluded.title
+                """, (chat_id, title))
 
-    def get_last_message_id(self) -> [int, datetime]:
+    def get_last_message_id(self, chat_id: int) -> [int, datetime]:
         cur = self.conn.cursor()
         cur.execute("""
             SELECT id, strftime('%Y-%m-%d 00:00:00', date) as "[timestamp]" FROM messages
@@ -165,6 +183,23 @@ class DB:
         for r in cur.fetchall():
             yield self._make_message(r)
 
+    def get_media(self, media_id) -> Media | None:
+        cur = self.conn.execute("""
+            SELECT id, type, url, title, description, thumb
+            FROM media
+            WHERE id = ?
+            """, (media_id))
+        res = cur.fetchone()
+        if res is None:
+            return None
+        media_id, media_type, media_url, media_title, desc, media_thumb = res
+        return Media(id=media_id,
+                    type=media_type,
+                    url=media_url,
+                    title=media_title,
+                    description=desc,
+                    thumb=media_thumb)
+
     def get_message_count(self, year, month) -> int:
         date = "{}{:02d}".format(year, month)
 
@@ -186,33 +221,34 @@ class DB:
             """, (u.id, u.username, u.first_name, u.last_name, " ".join(u.tags), u.avatar))
 
     def insert_media(self, m: Media):
-        cur = self.conn.cursor()
-        cur.execute("""INSERT OR REPLACE INTO media
-            (id, type, url, title, description, thumb)
-            VALUES(?, ?, ?, ?, ?, ?)""",
-                    (m.id,
-                     m.type,
-                     m.url,
-                     m.title,
-                     m.description,
-                     m.thumb)
-                    )
+        with self.conn:
+            self.conn.execute("""INSERT OR REPLACE INTO media
+                (id, type, url, title, description, thumb)
+                VALUES(?, ?, ?, ?, ?, ?)""",
+                        (m.id,
+                        m.type,
+                        m.url,
+                        m.title,
+                        m.description,
+                        m.thumb)
+                        )
 
-    def insert_message(self, m: Message):
-        cur = self.conn.cursor()
-        cur.execute("""INSERT OR REPLACE INTO messages
-            (id, type, date, edit_date, content, reply_to, user_id, media_id)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (m.id,
-                     m.type,
-                     m.date.strftime("%Y-%m-%d %H:%M:%S"),
-                     m.edit_date.strftime(
-                         "%Y-%m-%d %H:%M:%S") if m.edit_date else None,
-                     m.content,
-                     m.reply_to,
-                     m.user.id,
-                     m.media.id if m.media else None)
-                    )
+    def insert_message(self, chat_id: int, m: Message):
+        with self.conn:
+            self.conn.execute("""INSERT OR REPLACE INTO ?
+                (id, type, date, edit_date, content, reply_to, user_id, media_id)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (chat_id,
+                        m.id,
+                        m.type,
+                        m.date.strftime("%Y-%m-%d %H:%M:%S"),
+                        m.edit_date.strftime(
+                            "%Y-%m-%d %H:%M:%S") if m.edit_date else None,
+                        m.content,
+                        m.reply_to,
+                        m.user.id,
+                        m.media.id if m.media else None)
+                        )
 
     def commit(self):
         """Commit pending writes to the DB."""

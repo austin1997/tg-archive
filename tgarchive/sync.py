@@ -11,7 +11,7 @@ from PIL import Image
 from telethon import TelegramClient, errors, sync
 import telethon.tl.types
 
-from .db import User, Message, Media
+from .db import User, Message, Media, DB
 
 
 class Sync:
@@ -22,7 +22,7 @@ class Sync:
     config = {}
     db = None
 
-    def __init__(self, config, session_file, db):
+    def __init__(self, config, session_file, db: DB):
         self.config = config
         self.db = db
 
@@ -37,6 +37,10 @@ class Sync:
         into the local SQLite DB.
         """
 
+        group_entity = self._get_group_entity(self.config["group"])
+        group_id = group_entity.id
+        self.db.create_chat_table(group_id, group_entity.title)
+
         if ids:
             last_id, last_date = (ids, None)
             logging.info("fetching message id={}".format(ids))
@@ -44,11 +48,9 @@ class Sync:
             last_id, last_date = (from_id, None)
             logging.info("fetching from last message id={}".format(last_id))
         else:
-            last_id, last_date = self.db.get_last_message_id()
+            last_id, last_date = self.db.get_last_message_id(group_id)
             logging.info("fetching from last message id={} ({})".format(
                 last_id, last_date))
-
-        group_id = self._get_group_id(self.config["group"])
 
         n = 0
         while True:
@@ -303,12 +305,16 @@ class Sync:
                                 "skipping media #{} / {}".format(msg.file.name, msg.file.mime_type))
                             return
 
-                logging.info("downloading media #{}".format(msg.id))
                 try:
+                    cache = self.db.get_media(msg.file.id)
+                    if cache is not None:
+                        logging.info("found media #{} from msg id: {} in cache".format(msg.file.id, msg.id))
+                        return cache
+                    logging.info("downloading media #{} from msg id: {}".format(msg.file.id, msg.id))
                     basename, fname, thumb = self._download_media(msg)
                     return Media(
-                        id=msg.id,
-                        type="photo",
+                        id=msg.file.id,
+                        type=msg.file.mine_type if hasattr(msg, "file") and hasattr(msg.file, "mime_type") else "photo",
                         url=fname,
                         title=basename,
                         description=None,
@@ -326,20 +332,24 @@ class Sync:
         # Download the media to the temp dir and copy it back as
         # there does not seem to be a way to get the canonical
         # filename before the download.
-        fpath = self.client.download_media(msg, file=tempfile.gettempdir())
+        media_dir = os.path.abspath(self.config["media_dir"])
+        base_dir = os.path.basename(media_dir)
+        parent_dir = os.path.dirname(media_dir)
+        media_tmp_dir = os.path.join(parent_dir, base_dir + "_tmp")
+        fpath = self.client.download_media(msg, file=media_tmp_dir)
         basename = os.path.basename(fpath)
 
-        newname = "{}.{}".format(msg.id, self._get_file_ext(basename))
-        shutil.move(fpath, os.path.join(self.config["media_dir"], newname))
+        # newname = "{}.{}".format(msg.id, self._get_file_ext(basename))
+        newname = basename
+        shutil.move(fpath, os.path.join(media_dir, newname))
 
         # If it's a photo, download the thumbnail.
         tname = None
         if isinstance(msg.media, telethon.tl.types.MessageMediaPhoto):
             tpath = self.client.download_media(
-                msg, file=tempfile.gettempdir(), thumb=1)
-            tname = "thumb_{}.{}".format(
-                msg.id, self._get_file_ext(os.path.basename(tpath)))
-            shutil.move(tpath, os.path.join(self.config["media_dir"], tname))
+                msg, file=media_tmp_dir, thumb=-1)
+            tname = "thumb_{}".format(os.path.basename(tpath))
+            shutil.move(tpath, os.path.join(media_dir, tname))
 
         return basename, newname, tname
 
@@ -372,14 +382,8 @@ class Sync:
         im.save(fpath, "JPEG")
 
         return fname
-
-    def _get_group_id(self, group):
-        """
-        Syncs the Entity cache and returns the Entity ID for the specified group,
-        which can be a str/int for group ID, group name, or a group username.
-
-        The authorized user must be a part of the group.
-        """
+    
+    def _get_group_entity(self, group):
         # Get all dialogs for the authorized user, which also
         # syncs the entity cache to get latest entities
         # ref: https://docs.telethon.dev/en/latest/concepts/entities.html#getting-entities
@@ -401,7 +405,16 @@ class Sync:
             # This is a critical error, so exit with code: 1
             exit(1)
 
-        return entity.id
+        return entity
+
+    def _get_group_id(self, group):
+        """
+        Syncs the Entity cache and returns the Entity ID for the specified group,
+        which can be a str/int for group ID, group name, or a group username.
+
+        The authorized user must be a part of the group.
+        """
+        return self._get_group_entity(group).id
 
     def _downloadAvatarForUserOrChat(self, entity):
         avatar = None
