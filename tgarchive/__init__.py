@@ -143,7 +143,8 @@ def main():
         except KeyboardInterrupt as e:
             logging.info("sync cancelled manually")
             if cfg.get("use_takeout", False):
-                s.finish_takeout()
+                # with s.client:
+                s.client.loop.run_until_complete(s.finish_takeout())
             sys.exit()
         except:
             raise

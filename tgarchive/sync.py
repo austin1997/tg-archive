@@ -9,10 +9,10 @@ import time
 import traceback
 
 from PIL import Image
-from telethon import TelegramClient, errors, sync
+from telethon import TelegramClient, errors
 import telethon.tl.types
 
-from tqdm import tqdm
+from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from .db import User, Message, Media, DB
@@ -46,12 +46,16 @@ class Sync:
         self.media_tmp_dir = media_tmp_dir
 
     def sync(self, ids=None, from_id=None):
+        with self.client:
+            self.client.loop.run_until_complete(self._async(ids, from_id))
+
+    async def _async(self, ids=None, from_id=None):
         """
         Sync syncs messages from Telegram from the last synced message
         into the local SQLite DB.
         """
 
-        group_entity = self._get_group_entity(self.config["group"])
+        group_entity = await self._get_group_entity(self.config["group"])
         group_id = group_entity.id
         self.db.create_chat_table(group_id, group_entity.title)
 
@@ -67,46 +71,32 @@ class Sync:
                 last_id, last_date))
 
         n = 0
-        while True:
-            has = False
-            for m in self._get_messages(group_id,
-                                        offset_id=last_id if last_id else 0,
-                                        ids=ids):
-                if not m:
-                    continue
+        async for msg in self.client.iter_messages(group_entity, reverse=True, offset_id=last_id if last_id is not None else 0, ids=ids):
+            
+            m = await self._get_message(msg)
+            
+            if m is None:
+                continue
 
-                has = True
+            # Insert the records into DB.
+            self.db.insert_user(m.user)
 
-                # Insert the records into DB.
-                self.db.insert_user(m.user)
+            if m.media:
+                self.db.insert_media(m.media)
 
-                if m.media:
-                    self.db.insert_media(m.media)
+            self.db.insert_message(group_id, m)
 
-                self.db.insert_message(group_id, m)
-
-                last_date = m.date
-                n += 1
-                if n % 300 == 0:
-                    logging.info("fetched {} messages".format(n))
-                    self.db.commit()
-
-                if 0 < self.config["fetch_limit"] <= n or ids:
-                    has = False
-                    break
+            last_date = m.date
+            n += 1
+            if n % 300 == 0:
+                logging.info("fetched {} messages".format(n))
+                self.db.commit()
 
             self.db.commit()
-            if has:
-                last_id = m.id
-                logging.info("fetched {} messages. sleeping for {} seconds".format(
-                    n, self.config["fetch_wait"]))
-                time.sleep(self.config["fetch_wait"])
-            else:
-                break
 
         self.db.commit()
         if self.config.get("use_takeout", False):
-            self.finish_takeout()
+            await self.finish_takeout()
         logging.info(
             "finished. fetched {} messages. last message = {}".format(n, last_date))
 
@@ -141,9 +131,9 @@ class Sync:
                                                     megagroups=True, 
                                                     channels=True, 
                                                     files=True, 
-                                                    max_file_size=4*1024*1024*1024).__enter__()
+                                                    max_file_size=4*1024*1024*1024)
                     # check if the takeout session gets invalidated
-                    takeout_client.get_messages("me")
+                    takeout_client.get_dialogs()
                     return takeout_client
                 except errors.TakeoutInitDelayError as e:
                     logging.info(
@@ -161,53 +151,50 @@ class Sync:
         else:
             return client
 
-    def finish_takeout(self):
-        self.client.__exit__(None, None, None)
+    async def finish_takeout(self):
+        await self.client.end_takeout(success=True)
 
-    def _get_messages(self, group, offset_id, ids=None) -> Message:
-        messages = self._fetch_messages(group, offset_id, ids)
+    async def _get_message(self, msg) -> Message:
         # https://docs.telethon.dev/en/latest/quick-references/objects-reference.html#message
-        for m in messages:
-            if not m:
-                continue
+        if msg is None:
+            return None
+        # Media.
+        sticker = None
+        med = None
+        if msg.media:
+            # If it's a sticker, get the alt value (unicode emoji).
+            if isinstance(msg.media, telethon.tl.types.MessageMediaDocument) and \
+                    hasattr(msg.media, "document") and \
+                    msg.media.document.mime_type == "application/x-tgsticker":
+                alt = [a.alt for a in msg.media.document.attributes if isinstance(
+                    a, telethon.tl.types.DocumentAttributeSticker)]
+                if len(alt) > 0:
+                    sticker = alt[0]
+            elif isinstance(msg.media, telethon.tl.types.MessageMediaPoll):
+                med = self._make_poll(msg)
+            else:
+                med = await self._get_media(msg)
 
-            # Media.
-            sticker = None
-            med = None
-            if m.media:
-                # If it's a sticker, get the alt value (unicode emoji).
-                if isinstance(m.media, telethon.tl.types.MessageMediaDocument) and \
-                        hasattr(m.media, "document") and \
-                        m.media.document.mime_type == "application/x-tgsticker":
-                    alt = [a.alt for a in m.media.document.attributes if isinstance(
-                        a, telethon.tl.types.DocumentAttributeSticker)]
-                    if len(alt) > 0:
-                        sticker = alt[0]
-                elif isinstance(m.media, telethon.tl.types.MessageMediaPoll):
-                    med = self._make_poll(m)
-                else:
-                    med = self._get_media(m)
+        # Message.
+        typ = "message"
+        if msg.action:
+            if isinstance(msg.action, telethon.tl.types.MessageActionChatAddUser):
+                typ = "user_joined"
+            elif isinstance(msg.action, telethon.tl.types.MessageActionChatJoinedByLink):
+                typ = "user_joined_by_link"
+            elif isinstance(msg.action, telethon.tl.types.MessageActionChatDeleteUser):
+                typ = "user_left"
 
-            # Message.
-            typ = "message"
-            if m.action:
-                if isinstance(m.action, telethon.tl.types.MessageActionChatAddUser):
-                    typ = "user_joined"
-                elif isinstance(m.action, telethon.tl.types.MessageActionChatJoinedByLink):
-                    typ = "user_joined_by_link"
-                elif isinstance(m.action, telethon.tl.types.MessageActionChatDeleteUser):
-                    typ = "user_left"
-
-            yield Message(
-                type=typ,
-                id=m.id,
-                date=m.date,
-                edit_date=m.edit_date,
-                content=sticker if sticker else m.raw_text,
-                reply_to=m.reply_to_msg_id if m.reply_to and m.reply_to.reply_to_msg_id else None,
-                user=self._get_user(m.sender, m.chat),
-                media=med
-            )
+        return Message(
+            type=typ,
+            id=msg.id,
+            date=msg.date,
+            edit_date=msg.edit_date,
+            content=sticker if sticker else msg.raw_text,
+            reply_to=msg.reply_to_msg_id if msg.reply_to and msg.reply_to.reply_to_msg_id else None,
+            user=await self._get_user(await msg.get_sender(), await msg.get_chat()),
+            media=med
+        )
 
     def _fetch_messages(self, group, offset_id, ids=None) -> Message:
         try:
@@ -225,7 +212,7 @@ class Sync:
             logging.info(
                 "flood waited: have to wait {} seconds".format(e.seconds))
 
-    def _get_user(self, u, chat) -> User:
+    async def _get_user(self, u, chat) -> User:
         tags = []
 
         # if user info is empty, check for message from group
@@ -235,7 +222,7 @@ class Sync:
             chat.title != ''
             ):
                 tags.append("group_self")
-                avatar = self._downloadAvatarForUserOrChat(chat)
+                avatar = await self._downloadAvatarForUserOrChat(chat)
                 return User(
                     id=chat.id,
                     username=chat.title,
@@ -268,7 +255,7 @@ class Sync:
             tags.append("fake")
 
         # Download sender's profile photo if it's not already cached.
-        avatar = self._downloadAvatarForUserOrChat(u)
+        avatar = await self._downloadAvatarForUserOrChat(u)
 
         return User(
             id=u.id,
@@ -303,7 +290,7 @@ class Sync:
             thumb=None
         )
 
-    def _get_media(self, msg):
+    async def _get_media(self, msg):
         if isinstance(msg.media, telethon.tl.types.MessageMediaWebPage) and \
                 not isinstance(msg.media.webpage, telethon.tl.types.WebPageEmpty):
             return Media(
@@ -333,7 +320,7 @@ class Sync:
                         logging.info("found media #{} from msg id: {} in cache".format(msg.file.id, msg.id))
                         return cache
                     logging.info("downloading media #{} from msg id: {}".format(msg.file.id, msg.id))
-                    basename, fname, thumb = self._download_media(msg)
+                    basename, fname, thumb = await self._download_media(msg)
                     return Media(
                         id=msg.file.id,
                         type=msg.file.mime_type if hasattr(msg, "file") and hasattr(msg.file, "mime_type") else "photo",
@@ -347,15 +334,53 @@ class Sync:
                         "error downloading media: #{}: {}".format(msg.id, e))
                     traceback.print_exc()
 
-    def _download_with_progress(self, msg, dst_dir, **kwargs) -> str:
+    async def _download_with_progress(self, msg, rename_prefix="", **kwargs):
         def progress_callback(current, total):
             pbar.update(current - pbar.n)
 
         with logging_redirect_tqdm():
-            with tqdm(desc=msg.file.title, total=msg.file.size, unit='B', unit_scale=True, unit_divisor=1024, miniters=1) as pbar:
-                return self.client.download_media(msg, file=dst_dir, progress_callback=progress_callback, **kwargs)
+            with tqdm(desc=msg.file.name, total=msg.file.size, unit='B', unit_scale=True, unit_divisor=1024, miniters=1) as pbar:
+                tmpfile_path = await self.client.download_media(msg, file=self.media_tmp_dir, progress_callback=progress_callback, **kwargs)
+                basename = os.path.basename(tmpfile_path)
+                destination_path = os.path.join(self.media_dir, f"{rename_prefix}{basename}")
+                if os.path.exists(destination_path): # Create a new name if the file already exists
+                    base, extension = os.path.splitext(destination_path)
+                    i = 1
+                    new_path = f"{base}_{i}{extension}"
+                    while os.path.exists(new_path):
+                        i += 1
+                        new_path = f"{base}_{i}{extension}"
+                        destination_path = new_path
+                # Move the file
+                shutil.move(tmpfile_path, destination_path)
+                return basename, os.path.basename(destination_path)
+            
+    async def _async_download(self, msg, rename_prefix=""):
+        async def _download(msg, tmpfile_path):
+            with open(tmpfile_path, 'wb') as fd:
+                with logging_redirect_tqdm():
+                    with tqdm(desc=msg.file.name, total=msg.file.size, unit='B', unit_scale=True, unit_divisor=1024, miniters=1) as pbar:
+                        async for chunk in self.client.iter_download(msg):
+                            # logging.info("chunk: {}".format(chunk))
+                            fd.write(chunk)
+                            pbar.update(len(chunk))
+        tmpfile_path = os.path.join(self.media_tmp_dir, msg.file.name)
+        await _download(msg, tmpfile_path)
+        basename = os.path.basename(tmpfile_path)
+        destination_path = os.path.join(self.media_dir, f"{rename_prefix}{basename}")
+        if os.path.exists(destination_path): # Create a new name if the file already exists
+            base, extension = os.path.splitext(destination_path)
+            i = 1
+            new_path = f"{base}_{i}{extension}"
+            while os.path.exists(new_path):
+                i += 1
+                new_path = f"{base}_{i}{extension}"
+                destination_path = new_path
+        # Move the file
+        shutil.move(tmpfile_path, destination_path)
+        return basename, os.path.basename(destination_path)
 
-    def _download_media(self, msg) -> [str, str, str]:
+    async def _download_media(self, msg) -> [str, str, str]:
         """
         Download a media / file attached to a message and return its original
         filename, sanitized name on disk, and the thumbnail (if any). 
@@ -364,19 +389,12 @@ class Sync:
         # there does not seem to be a way to get the canonical
         # filename before the download.
 
-        fpath = self._download_with_progress(msg, self.media_tmp_dir)
-        basename = os.path.basename(fpath)
-
-        # newname = "{}.{}".format(msg.id, self._get_file_ext(basename))
-        newname = basename
-        shutil.move(fpath, os.path.join(self.media_dir, newname))
+        basename, newname = await self._async_download(msg)
 
         # If it's a photo, download the thumbnail.
         tname = None
         if isinstance(msg.media, telethon.tl.types.MessageMediaPhoto):
-            tpath = self._download_with_progress(msg, self.media_tmp_dir, thumb=1)
-            tname = "thumb_{}".format(os.path.basename(tpath))
-            shutil.move(tpath, os.path.join(self.media_dir, tname))
+            _, tname = await self._download_with_progress(msg, "thumb_", thumb=1)
 
         return basename, newname, tname
 
@@ -388,7 +406,7 @@ class Sync:
 
         return ".file"
 
-    def _download_avatar(self, user):
+    async def _download_avatar(self, user):
         fname = "avatar_{}.jpg".format(user.id)
         fpath = os.path.join(self.config["media_dir"], fname)
 
@@ -399,7 +417,7 @@ class Sync:
 
         # Download the file into a container, resize it, and then write to disk.
         b = BytesIO()
-        profile_photo = self.client.download_profile_photo(user, file=b)
+        profile_photo = await self.client.download_profile_photo(user, file=b)
         if profile_photo is None:
             logging.info("user has no avatar #{}".format(user.id))
             return None
@@ -410,11 +428,11 @@ class Sync:
 
         return fname
     
-    def _get_group_entity(self, group):
+    async def _get_group_entity(self, group):
         # Get all dialogs for the authorized user, which also
         # syncs the entity cache to get latest entities
         # ref: https://docs.telethon.dev/en/latest/concepts/entities.html#getting-entities
-        _ = self.client.get_dialogs()
+        _ = await self.client.get_dialogs()
 
         try:
             # If the passed group is a group ID, extract it.
@@ -425,7 +443,7 @@ class Sync:
             pass
 
         try:
-            entity = self.client.get_entity(group)
+            entity = await self.client.get_entity(group)
         except ValueError:
             logging.critical("the group: {} does not exist,"
                              " or the authorized user is not a participant!".format(group))
@@ -443,11 +461,11 @@ class Sync:
         """
         return self._get_group_entity(group).id
 
-    def _downloadAvatarForUserOrChat(self, entity):
+    async def _downloadAvatarForUserOrChat(self, entity):
         avatar = None
         if self.config["download_avatars"]:
             try:
-                fname = self._download_avatar(entity)
+                fname = await self._download_avatar(entity)
                 avatar = fname
             except Exception as e:
                 logging.error(
