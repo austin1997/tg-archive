@@ -184,11 +184,12 @@ class DB:
             yield self._make_message(r)
 
     def get_media(self, media_id: str):
+        media_id = str(media_id)
         cur = self.conn.execute("""
             SELECT id, type, url, title, description, thumb
             FROM media
             WHERE id = ?
-            """, (media_id))
+            """, (media_id,))
         res = cur.fetchone()
         if res is None:
             return None

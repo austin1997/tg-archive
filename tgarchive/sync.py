@@ -12,6 +12,9 @@ from PIL import Image
 from telethon import TelegramClient, errors, sync
 import telethon.tl.types
 
+import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
+
 from .db import User, Message, Media, DB
 
 
@@ -316,7 +319,7 @@ class Sync:
                     basename, fname, thumb = self._download_media(msg)
                     return Media(
                         id=msg.file.id,
-                        type=msg.file.mine_type if hasattr(msg, "file") and hasattr(msg.file, "mime_type") else "photo",
+                        type=msg.file.mime_type if hasattr(msg, "file") and hasattr(msg.file, "mime_type") else "photo",
                         url=fname,
                         title=basename,
                         description=None,
@@ -339,7 +342,15 @@ class Sync:
         base_dir = os.path.basename(media_dir)
         parent_dir = os.path.dirname(media_dir)
         media_tmp_dir = os.path.join(parent_dir, base_dir + "_tmp")
-        fpath = self.client.download_media(msg, file=media_tmp_dir)
+        if not os.path.exists(media_tmp_dir):
+            os.mkdir(media_tmp_dir)
+
+        def progress_callback(current, total):
+            pbar.update(current)
+
+        with logging_redirect_tqdm():
+            with tqdm(desc=msg.file.title, total=msg.file.size, unit='B', unit_scale=True, unit_divisor=1024, miniters=1) as pbar:
+                fpath = self.client.download_media(msg, file=media_tmp_dir, progress_callback=progress_callback)
         basename = os.path.basename(fpath)
 
         # newname = "{}.{}".format(msg.id, self._get_file_ext(basename))
