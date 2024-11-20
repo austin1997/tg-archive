@@ -96,7 +96,7 @@ class DB:
     
     def create_chat_table(self, chat_id: int, title: str):
         with self.conn:
-            self.conn.execute(create_chat_schema, chat_id)
+            self.conn.execute(create_chat_schema, (chat_id))
             self.conn.execute("""INSERT INTO chat (id, title)
                 VALUES(?, ?) ON CONFLICT (id)
                 DO UPDATE SET title=excluded.title
