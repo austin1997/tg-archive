@@ -6,6 +6,7 @@ import os
 import tempfile
 import shutil
 import time
+import traceback
 
 from PIL import Image
 from telethon import TelegramClient, errors, sync
@@ -322,7 +323,8 @@ class Sync:
                     )
                 except Exception as e:
                     logging.error(
-                        "error downloading media: #{}: {}".format(msg.id, e))
+                        "error downloading media: #{}: {}\n{}".format(msg.id, e))
+                    traceback.print_exc()
 
     def _download_media(self, msg) -> [str, str, str]:
         """
