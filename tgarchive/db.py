@@ -183,7 +183,7 @@ class DB:
         for r in cur.fetchall():
             yield self._make_message(r)
 
-    def get_media(self, media_id) -> Media | None:
+    def get_media(self, media_id):
         cur = self.conn.execute("""
             SELECT id, type, url, title, description, thumb
             FROM media
