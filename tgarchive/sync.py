@@ -45,10 +45,10 @@ class Sync:
         group_id = group_entity.id
         self.db.create_chat_table(group_id, group_entity.title)
 
-        if ids:
+        if ids is not None:
             last_id, last_date = (ids, None)
             logging.info("fetching message id={}".format(ids))
-        elif from_id:
+        elif from_id is not None:
             last_id, last_date = (from_id, None)
             logging.info("fetching from last message id={}".format(last_id))
         else:
