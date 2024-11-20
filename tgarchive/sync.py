@@ -12,7 +12,7 @@ from PIL import Image
 from telethon import TelegramClient, errors, sync
 import telethon.tl.types
 
-import tqdm
+from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from .db import User, Message, Media, DB
@@ -330,6 +330,16 @@ class Sync:
                         "error downloading media: #{}: {}".format(msg.id, e))
                     traceback.print_exc()
 
+    def _download_with_progress(self, msg, dst_dir, **kwargs) -> str:
+        prev_downloaded = 0
+        def progress_callback(current, total):
+            pbar.update(current - prev_downloaded)
+            prev_downloaded = current
+
+        with logging_redirect_tqdm():
+            with tqdm(desc=msg.file.title, total=msg.file.size, unit='B', unit_scale=True, unit_divisor=1024, miniters=1) as pbar:
+                return self.client.download_media(msg, file=dst_dir, progress_callback=progress_callback, **kwargs)
+
     def _download_media(self, msg) -> [str, str, str]:
         """
         Download a media / file attached to a message and return its original
@@ -345,12 +355,7 @@ class Sync:
         if not os.path.exists(media_tmp_dir):
             os.mkdir(media_tmp_dir)
 
-        def progress_callback(current, total):
-            pbar.update(current)
-
-        with logging_redirect_tqdm():
-            with tqdm(desc=msg.file.title, total=msg.file.size, unit='B', unit_scale=True, unit_divisor=1024, miniters=1) as pbar:
-                fpath = self.client.download_media(msg, file=media_tmp_dir, progress_callback=progress_callback)
+        fpath = self._download_with_progress(msg, media_tmp_dir)
         basename = os.path.basename(fpath)
 
         # newname = "{}.{}".format(msg.id, self._get_file_ext(basename))
@@ -360,8 +365,7 @@ class Sync:
         # If it's a photo, download the thumbnail.
         tname = None
         if isinstance(msg.media, telethon.tl.types.MessageMediaPhoto):
-            tpath = self.client.download_media(
-                msg, file=media_tmp_dir, thumb=-1)
+            tpath = self._download_with_progress(msg, media_tmp_dir, thumb=1)
             tname = "thumb_{}".format(os.path.basename(tpath))
             shutil.move(tpath, os.path.join(media_dir, tname))
 
