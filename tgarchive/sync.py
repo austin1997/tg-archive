@@ -69,7 +69,7 @@ class Sync:
                 if m.media:
                     self.db.insert_media(m.media)
 
-                self.db.insert_message(m)
+                self.db.insert_message(group_id, m)
 
                 last_date = m.date
                 n += 1
