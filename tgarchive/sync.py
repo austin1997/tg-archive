@@ -32,8 +32,18 @@ class Sync:
 
         self.client = self.new_client(session_file, config)
 
+        media_dir = os.path.abspath(self.config["media_dir"])
+        base_dir = os.path.basename(media_dir)
+        parent_dir = os.path.dirname(media_dir)
+        media_tmp_dir = os.path.join(parent_dir, base_dir + "_tmp")
         if not os.path.exists(self.config["media_dir"]):
             os.mkdir(self.config["media_dir"])
+
+        if os.path.exists(media_tmp_dir):
+            shutil.rmtree(media_tmp_dir)
+        os.mkdir(media_tmp_dir)
+        self.media_dir = media_dir
+        self.media_tmp_dir = media_tmp_dir
 
     def sync(self, ids=None, from_id=None):
         """
@@ -353,26 +363,20 @@ class Sync:
         # Download the media to the temp dir and copy it back as
         # there does not seem to be a way to get the canonical
         # filename before the download.
-        media_dir = os.path.abspath(self.config["media_dir"])
-        base_dir = os.path.basename(media_dir)
-        parent_dir = os.path.dirname(media_dir)
-        media_tmp_dir = os.path.join(parent_dir, base_dir + "_tmp")
-        if not os.path.exists(media_tmp_dir):
-            os.mkdir(media_tmp_dir)
 
-        fpath = self._download_with_progress(msg, media_tmp_dir)
+        fpath = self._download_with_progress(msg, self.media_tmp_dir)
         basename = os.path.basename(fpath)
 
         # newname = "{}.{}".format(msg.id, self._get_file_ext(basename))
         newname = basename
-        shutil.move(fpath, os.path.join(media_dir, newname))
+        shutil.move(fpath, os.path.join(self.media_dir, newname))
 
         # If it's a photo, download the thumbnail.
         tname = None
         if isinstance(msg.media, telethon.tl.types.MessageMediaPhoto):
-            tpath = self._download_with_progress(msg, media_tmp_dir, thumb=1)
+            tpath = self._download_with_progress(msg, self.media_tmp_dir, thumb=1)
             tname = "thumb_{}".format(os.path.basename(tpath))
-            shutil.move(tpath, os.path.join(media_dir, tname))
+            shutil.move(tpath, os.path.join(self.media_dir, tname))
 
         return basename, newname, tname
 
