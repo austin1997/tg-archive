@@ -96,7 +96,7 @@ class DB:
     
     def create_chat_table(self, chat_id: int, title: str):
         with self.conn:
-            self.conn.execute(create_chat_schema, (chat_id))
+            self.conn.execute(create_chat_schema, (chat_id,))
             self.conn.execute("""INSERT INTO chat (id, title)
                 VALUES(?, ?) ON CONFLICT (id)
                 DO UPDATE SET title=excluded.title
@@ -105,9 +105,9 @@ class DB:
     def get_last_message_id(self, chat_id: int) -> [int, datetime]:
         cur = self.conn.cursor()
         cur.execute("""
-            SELECT id, strftime('%Y-%m-%d 00:00:00', date) as "[timestamp]" FROM messages
+            SELECT id, strftime('%Y-%m-%d 00:00:00', date) as "[timestamp]" FROM ?
             ORDER BY id DESC LIMIT 1
-        """)
+        """, (chat_id,))
         res = cur.fetchone()
         if not res:
             return 0, None
