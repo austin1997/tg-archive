@@ -23,7 +23,7 @@ CREATE table IF NOT EXISTS "{}" (
     content TEXT,
     reply_to INTEGER,
     user_id INTEGER,
-    media_id INTEGER,
+    media_id TEXT,
     FOREIGN KEY(user_id) REFERENCES users(id),
     FOREIGN KEY(media_id) REFERENCES media(id)
 );
@@ -40,7 +40,7 @@ CREATE table users (
 """
 create_media_schema = """
 CREATE table media (
-    id INTEGER NOT NULL PRIMARY KEY,
+    id TEXT NOT NULL PRIMARY KEY,
     type TEXT,
     url TEXT,
     title TEXT,
@@ -183,7 +183,7 @@ class DB:
         for r in cur.fetchall():
             yield self._make_message(r)
 
-    def get_media(self, media_id):
+    def get_media(self, media_id: str):
         cur = self.conn.execute("""
             SELECT id, type, url, title, description, thumb
             FROM media

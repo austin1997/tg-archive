@@ -307,6 +307,7 @@ class Sync:
                             return
 
                 try:
+                    logging.info("check media #{} in cache".format(msg.file.id))
                     cache = self.db.get_media(msg.file.id)
                     if cache is not None:
                         logging.info("found media #{} from msg id: {} in cache".format(msg.file.id, msg.id))
@@ -323,7 +324,7 @@ class Sync:
                     )
                 except Exception as e:
                     logging.error(
-                        "error downloading media: #{}: {}\n{}".format(msg.id, e))
+                        "error downloading media: #{}: {}".format(msg.id, e))
                     traceback.print_exc()
 
     def _download_media(self, msg) -> [str, str, str]:
