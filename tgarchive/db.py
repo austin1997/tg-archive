@@ -15,7 +15,7 @@ CREATE table chat (
 """
 
 create_chat_schema = """
-CREATE table IF NOT EXISTS ? (
+CREATE table IF NOT EXISTS "{}" (
     id INTEGER NOT NULL PRIMARY KEY,
     type TEXT NOT NULL,
     date TIMESTAMP NOT NULL,
@@ -96,7 +96,7 @@ class DB:
     
     def create_chat_table(self, chat_id: int, title: str):
         with self.conn:
-            self.conn.execute(create_chat_schema, (chat_id,))
+            self.conn.execute(create_chat_schema.format(chat_id))
             self.conn.execute("""INSERT INTO chat (id, title)
                 VALUES(?, ?) ON CONFLICT (id)
                 DO UPDATE SET title=excluded.title
@@ -105,9 +105,9 @@ class DB:
     def get_last_message_id(self, chat_id: int) -> [int, datetime]:
         cur = self.conn.cursor()
         cur.execute("""
-            SELECT id, strftime('%Y-%m-%d 00:00:00', date) as "[timestamp]" FROM ?
+            SELECT id, strftime('%Y-%m-%d 00:00:00', date) as "[timestamp]" FROM "{}"
             ORDER BY id DESC LIMIT 1
-        """, (chat_id,))
+        """.format(chat_id))
         res = cur.fetchone()
         if not res:
             return 0, None
@@ -235,10 +235,10 @@ class DB:
 
     def insert_message(self, chat_id: int, m: Message):
         with self.conn:
-            self.conn.execute("""INSERT OR REPLACE INTO ?
+            self.conn.execute("""INSERT OR REPLACE INTO "{}"
                 (id, type, date, edit_date, content, reply_to, user_id, media_id)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (chat_id,
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)""".format(chat_id),
+                        (
                         m.id,
                         m.type,
                         m.date.strftime("%Y-%m-%d %H:%M:%S"),
