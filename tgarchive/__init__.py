@@ -77,7 +77,7 @@ def main():
                    dest="sync", help="sync data from telegram group to the local DB")
     s.add_argument("-id", "--id", action="store", type=int, nargs="+",
                    dest="id", help="sync (or update) messages for given ids")
-    s.add_argument("-from-id", "--from-id", action="store", type=int,
+    s.add_argument("-from_id", "--from_id", action="store", type=int,
                    dest="from_id", help="sync (or update) messages from this id to the latest")
 
     b = p.add_argument_group("build")
@@ -134,8 +134,8 @@ def main():
         cfg = get_config(args.config)
         mode = "takeout" if cfg.get("use_takeout", False) else "standard"
 
-        logging.info("starting Telegram sync (batch_size={}, limit={}, wait={}, mode={})".format(
-            cfg["fetch_batch_size"], cfg["fetch_limit"], cfg["fetch_wait"], mode
+        logging.info("starting Telegram sync (batch_size={}, limit={}, wait={}, mode={}, id={}, from_id={})".format(
+            cfg["fetch_batch_size"], cfg["fetch_limit"], cfg["fetch_wait"], mode, args.id, args.from_id
         ))
         try:
             s = Sync(cfg, args.session, DB(args.data))

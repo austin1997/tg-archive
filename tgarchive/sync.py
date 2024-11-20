@@ -124,7 +124,14 @@ class Sync:
         if config.get("use_takeout", False):
             for retry in range(3):
                 try:
-                    takeout_client = client.takeout(finalize=True).__enter__()
+                    takeout_client = client.takeout(finalize=True, 
+                                                    contacts=True, 
+                                                    users=True, 
+                                                    chats=True, 
+                                                    megagroups=True, 
+                                                    channels=True, 
+                                                    files=True, 
+                                                    max_file_size=4*1024*1024*1024).__enter__()
                     # check if the takeout session gets invalidated
                     takeout_client.get_messages("me")
                     return takeout_client
@@ -331,10 +338,8 @@ class Sync:
                     traceback.print_exc()
 
     def _download_with_progress(self, msg, dst_dir, **kwargs) -> str:
-        prev_downloaded = 0
         def progress_callback(current, total):
-            pbar.update(current - prev_downloaded)
-            prev_downloaded = current
+            pbar.update(current - pbar.n)
 
         with logging_redirect_tqdm():
             with tqdm(desc=msg.file.title, total=msg.file.size, unit='B', unit_scale=True, unit_divisor=1024, miniters=1) as pbar:
