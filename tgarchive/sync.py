@@ -46,8 +46,43 @@ class Sync:
         self.media_tmp_dir = media_tmp_dir
 
     def sync(self, ids=None, from_id=None):
-        with self.client:
-            self.client.loop.run_until_complete(self._async(ids, from_id))
+        client = self.client
+        try:
+            with client:
+                if self.config.get("use_takeout", False):
+                    for retry in range(3):
+                        try:
+                            with client.takeout(finalize=True, 
+                                                contacts=True, 
+                                                users=True, 
+                                                chats=True, 
+                                                megagroups=True, 
+                                                channels=True, 
+                                                files=True, 
+                                                max_file_size=4*1024*1024*1024) as takeout_client:
+                                # check if the takeout session gets invalidated
+                                self.client = takeout_client
+                                self.client.loop.run_until_complete(self._async(ids, from_id))
+                        except errors.TakeoutInitDelayError as e:
+                            logging.info(
+                                "please allow the data export request received from Telegram on your device. "
+                                "you can also wait for {} seconds.".format(e.seconds))
+                            logging.info(
+                                "press Enter key after allowing the data export request to continue..")
+                            input()
+                            logging.info("trying again.. ({})".format(retry + 2))
+                        except errors.TakeoutInvalidError:
+                            logging.info("takeout invalidated. delete the session.session file and try again.")
+                    else:
+                        logging.info("could not initiate takeout.")
+                        raise(Exception("could not initiate takeout."))
+                else:
+                    self.client.loop.run_until_complete(self._async(ids, from_id))
+        except KeyboardInterrupt as e:
+            logging.info("sync cancelled manually")
+            raise e
+        except:
+            raise
 
     async def _async(self, ids=None, from_id=None):
         """
@@ -119,37 +154,7 @@ class Sync:
                 return client_logger.debug(*args, **kwargs)
             client_logger._info(*args, **kwargs)
         client_logger.info = patched_info
-
-        client.start()
-        if config.get("use_takeout", False):
-            for retry in range(3):
-                try:
-                    takeout_client = client.takeout(finalize=True, 
-                                                    contacts=True, 
-                                                    users=True, 
-                                                    chats=True, 
-                                                    megagroups=True, 
-                                                    channels=True, 
-                                                    files=True, 
-                                                    max_file_size=4*1024*1024*1024)
-                    # check if the takeout session gets invalidated
-                    takeout_client.get_dialogs()
-                    return takeout_client
-                except errors.TakeoutInitDelayError as e:
-                    logging.info(
-                        "please allow the data export request received from Telegram on your device. "
-                        "you can also wait for {} seconds.".format(e.seconds))
-                    logging.info(
-                        "press Enter key after allowing the data export request to continue..")
-                    input()
-                    logging.info("trying again.. ({})".format(retry + 2))
-                except errors.TakeoutInvalidError:
-                    logging.info("takeout invalidated. delete the session.session file and try again.")
-            else:
-                logging.info("could not initiate takeout.")
-                raise(Exception("could not initiate takeout."))
-        else:
-            return client
+        return client
 
     async def finish_takeout(self):
         await self.client.end_takeout(success=True)
@@ -314,15 +319,20 @@ class Sync:
                             return
 
                 try:
-                    logging.info("check media #{} in cache".format(msg.file.id))
-                    cache = self.db.get_media(msg.file.id)
+                    media_id = None
+                    if getattr(msg, "photo", None) is not None:
+                        media_id = msg.photo.id
+                    elif getattr(msg, "document", None) is not None:
+                        media_id = msg.document.id
+                    logging.info("checking media id: {}, name: {} in cache".format(media_id, msg.file.name))
+                    cache = self.db.get_media(media_id, msg.file.id if getattr(msg, "document", None) is not None else None)
                     if cache is not None:
-                        logging.info("found media #{} from msg id: {} in cache".format(msg.file.id, msg.id))
+                        logging.info("found media id: {} in cache".format(media_id))
                         return cache
-                    logging.info("downloading media #{} from msg id: {}".format(msg.file.id, msg.id))
+                    logging.info("downloading media id: {} from msg id: {}".format(media_id, msg.id))
                     basename, fname, thumb = await self._download_media(msg)
                     return Media(
-                        id=msg.file.id,
+                        id=media_id,
                         type=msg.file.mime_type if hasattr(msg, "file") and hasattr(msg.file, "mime_type") else "photo",
                         url=fname,
                         title=basename,
@@ -388,8 +398,10 @@ class Sync:
         # Download the media to the temp dir and copy it back as
         # there does not seem to be a way to get the canonical
         # filename before the download.
-
-        basename, newname = await self._async_download(msg)
+        if msg.file.name is not None:
+            basename, newname = await self._async_download(msg)
+        else:
+            basename, newname = await self._download_with_progress(msg)
 
         # If it's a photo, download the thumbnail.
         tname = None

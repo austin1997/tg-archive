@@ -8,7 +8,7 @@ import pytz
 from typing import Iterator
 
 create_chat_collection_schema = """
-CREATE table chat (
+CREATE table IF NOT EXISTS chat (
     id INTEGER NOT NULL PRIMARY KEY,
     title TEXT
 );
@@ -23,13 +23,13 @@ CREATE table IF NOT EXISTS "{}" (
     content TEXT,
     reply_to INTEGER,
     user_id INTEGER,
-    media_id TEXT,
+    media_id INTEGER,
     FOREIGN KEY(user_id) REFERENCES users(id),
     FOREIGN KEY(media_id) REFERENCES media(id)
 );
 """
 create_user_schema = """
-CREATE table users (
+CREATE table IF NOT EXISTS users (
     id INTEGER NOT NULL PRIMARY KEY,
     username TEXT,
     first_name TEXT,
@@ -39,8 +39,8 @@ CREATE table users (
 );
 """
 create_media_schema = """
-CREATE table media (
-    id TEXT NOT NULL PRIMARY KEY,
+CREATE table IF NOT EXISTS media (
+    id INTEGER NOT NULL PRIMARY KEY,
     type TEXT,
     url TEXT,
     title TEXT,
@@ -85,11 +85,10 @@ class DB:
         if tz:
             self.tz = pytz.timezone(tz)
 
-        if is_new:
-            with self.conn:
-                self.conn.execute(create_media_schema)
-                self.conn.execute(create_user_schema)
-                self.conn.execute(create_chat_collection_schema)
+        with self.conn:
+            self.conn.execute(create_media_schema)
+            self.conn.execute(create_user_schema)
+            self.conn.execute(create_chat_collection_schema)
 
     def _parse_date(self, d) -> str:
         return datetime.strptime(d, "%Y-%m-%dT%H:%M:%S%z")
@@ -183,13 +182,28 @@ class DB:
         for r in cur.fetchall():
             yield self._make_message(r)
 
-    def get_media(self, media_id: str):
-        media_id = str(media_id)
+    def get_media(self, media_id: int, old_media_id: str = None):
+        res = None
+        if old_media_id is not None:
+            cur = self.conn.execute("""
+                SELECT id, type, url, title, description, thumb
+                FROM old_media
+                WHERE id = ?
+                """, (old_media_id,))
+            res = cur.fetchone()
+            if res is not None:
+                _, media_type, media_url, media_title, desc, media_thumb = res
+                return Media(id=media_id,
+                            type=media_type,
+                            url=media_url,
+                            title=media_title,
+                            description=desc,
+                            thumb=media_thumb)
         cur = self.conn.execute("""
-            SELECT id, type, url, title, description, thumb
-            FROM media
-            WHERE id = ?
-            """, (media_id,))
+                SELECT id, type, url, title, description, thumb
+                FROM media
+                WHERE id = ?
+                """, (media_id,))
         res = cur.fetchone()
         if res is None:
             return None
@@ -223,7 +237,7 @@ class DB:
 
     def insert_media(self, m: Media):
         with self.conn:
-            self.conn.execute("""INSERT OR REPLACE INTO media
+            self.conn.execute("""INSERT OR IGNORE INTO media
                 (id, type, url, title, description, thumb)
                 VALUES(?, ?, ?, ?, ?, ?)""",
                         (m.id,
