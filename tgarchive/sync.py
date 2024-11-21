@@ -95,8 +95,8 @@ class Sync:
             self.db.commit()
 
         self.db.commit()
-        if self.config.get("use_takeout", False):
-            await self.finish_takeout()
+        # if self.config.get("use_takeout", False):
+        #     await self.finish_takeout()
         logging.info(
             "finished. fetched {} messages. last message = {}".format(n, last_date))
 
