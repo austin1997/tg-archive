@@ -50,7 +50,9 @@ class Sync:
         try:
             with client:
                 if self.config.get("use_takeout", False):
-                    for retry in range(3):
+                    max_retry_times = 3
+                    retry = 0
+                    while retry < max_retry_times:
                         try:
                             with client.takeout(finalize=True, 
                                                 contacts=True, 
@@ -63,19 +65,18 @@ class Sync:
                                 # check if the takeout session gets invalidated
                                 self.client = takeout_client
                                 self.client.loop.run_until_complete(self._async(ids, from_id))
+                                retry = max_retry_times
                         except errors.TakeoutInitDelayError as e:
+                            retry += 1
                             logging.info(
                                 "please allow the data export request received from Telegram on your device. "
                                 "you can also wait for {} seconds.".format(e.seconds))
                             logging.info(
                                 "press Enter key after allowing the data export request to continue..")
                             input()
-                            logging.info("trying again.. ({})".format(retry + 2))
+                            logging.info("trying again.. ({})".format(retry))
                         except errors.TakeoutInvalidError:
                             logging.info("takeout invalidated. delete the session.session file and try again.")
-                    else:
-                        logging.info("could not initiate takeout.")
-                        raise(Exception("could not initiate takeout."))
                 else:
                     self.client.loop.run_until_complete(self._async(ids, from_id))
         except KeyboardInterrupt as e:
