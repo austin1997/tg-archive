@@ -346,11 +346,12 @@ class Sync:
 
     async def _download_with_progress(self, msg, rename_prefix="", **kwargs):
         def progress_callback(current, total):
+            pbar.total = total
             pbar.update(current - pbar.n)
 
         with logging_redirect_tqdm():
             with tqdm(desc=msg.file.name, total=msg.file.size, unit='B', unit_scale=True, unit_divisor=1024, miniters=1) as pbar:
-                tmpfile_path = await self.client.download_media(msg, file=self.media_tmp_dir, progress_callback=progress_callback, **kwargs)
+                tmpfile_path = await utils.fast_download(self.client, msg, download_folder=self.media_tmp_dir, filename=msg.file.name, progress_callback=progress_callback, **kwargs)
                 basename = os.path.basename(tmpfile_path)
                 destination_path = os.path.join(self.media_dir, f"{rename_prefix}{basename}")
                 if os.path.exists(destination_path): # Create a new name if the file already exists
@@ -398,10 +399,7 @@ class Sync:
         # Download the media to the temp dir and copy it back as
         # there does not seem to be a way to get the canonical
         # filename before the download.
-        if msg.file.name is not None:
-            basename, newname = await self._async_download(msg)
-        else:
-            basename, newname = await self._download_with_progress(msg)
+        basename, newname = await self._download_with_progress(msg)
 
         # If it's a photo, download the thumbnail.
         tname = None

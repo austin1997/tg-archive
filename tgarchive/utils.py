@@ -83,8 +83,6 @@ def human_readable_size(size, decimal_places=2):
     return f"{size:.{decimal_places}f} {unit}"
 
 async def fast_download(client, msg, download_folder: str, filename = None, thumb = None, progress_callback = None):
-    timer = Timer()
-
     if msg.document is not None:
         dc_id, location, file_size = get_document_location(msg.document)
     elif msg.photo is not None:
