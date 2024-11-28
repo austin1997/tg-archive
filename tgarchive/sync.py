@@ -16,6 +16,7 @@ from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from .db import User, Message, Media, DB
+from . import utils
 
 
 class Sync:
@@ -320,12 +321,10 @@ class Sync:
                             return
 
                 try:
-                    media_id = None
-                    if getattr(msg, "photo", None) is not None:
-                        media_id = msg.photo.id
-                    elif getattr(msg, "document", None) is not None:
-                        media_id = msg.document.id
+                    media_id = utils.get_media_id(msg)                    
                     logging.info("checking media id: {}, name: {} in cache".format(media_id, msg.file.name))
+                    if media_id is None:
+                        raise
                     cache = self.db.get_media(media_id, msg.file.id if getattr(msg, "document", None) is not None else None)
                     if cache is not None:
                         logging.info("found media id: {} in cache".format(media_id))

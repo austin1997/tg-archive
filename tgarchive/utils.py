@@ -3,9 +3,56 @@ import os
 import pathlib
 import time
 import datetime as dt
+from telethon import utils, client
+from telethon.tl import types
 
 from .FastTelethon import upload_file, download_file
 
+def get_media_id(msg):
+    media_id = None
+    if getattr(msg, "photo", None) is not None:
+        media_id = msg.photo.id
+    elif getattr(msg, "document", None) is not None:
+        media_id = msg.document.id
+    return media_id
+
+def get_photo_location(photo, thumb = None):
+    """Specialized version of .download_media() for photos"""
+    # Determine the photo and its largest size
+    if isinstance(photo, types.MessageMediaPhoto):
+        photo = photo.photo
+        dc_id = photo.dc_id
+    if not isinstance(photo, types.Photo):
+        return None
+
+    # Include video sizes here (but they may be None so provide an empty list)
+    size = client.downloads.DownloadMethods._get_thumb(photo.sizes + (photo.video_sizes or []), thumb)
+    if not size or isinstance(size, types.PhotoSizeEmpty):
+        return None
+
+    # if isinstance(size, (types.PhotoCachedSize, types.PhotoStrippedSize)):
+    #     return self._download_cached_photo_size(size, file)
+
+    if isinstance(size, types.PhotoSizeProgressive):
+        file_size = max(size.sizes)
+    else:
+        file_size = size.size
+
+
+    return dc_id, types.InputPhotoFileLocation(
+        id=photo.id,
+        access_hash=photo.access_hash,
+        file_reference=photo.file_reference,
+        thumb_size=size.type
+    ), file_size
+
+def get_document_location(document):
+    """Specialized version of .download_media() for documents."""
+    if isinstance(document, types.MessageMediaDocument):
+        dc_id, location = utils.get_input_location(document)
+        return dc_id, location, document.document.size
+    else:
+        return None
 
 class Timer:
     def __init__(self, time_between=5):
@@ -35,46 +82,38 @@ def human_readable_size(size, decimal_places=2):
         size /= 1024.0
     return f"{size:.{decimal_places}f} {unit}"
 
-async def fast_download(client, msg, reply = None, download_folder = None, progress_bar_function = progress_bar_str):
+async def fast_download(client, msg, download_path: str, thumb = None, progress_callback = None):
     timer = Timer()
 
-    async def progress_bar(downloaded_bytes, total_bytes):
-        if timer.can_send():
-            data = progress_bar_function(downloaded_bytes, total_bytes)
-            await reply.edit(f"Downloading...\n{data}")
-
-    file = msg.document
-    filename = msg.file.name
-    dir = "downloads/"
-
-    try:
-        os.mkdir("downloads/")
-    except:
-        pass
-
-    if not filename:
-        filename = "video.mp4"
-                    
-    if download_folder == None:
-        download_location = dir + filename
+    if msg.document is not None:
+        dc_id, location, file_size = get_document_location(msg.document)
+    elif msg.photo is not None:
+        dc_id, location, file_size = get_photo_location(msg.photo, thumb)
     else:
-        download_location = download_folder + filename 
+        return None
 
-    with open(download_location, "wb") as f:
-        if reply != None:
-            await download_file(
-                client=client, 
-                location=file, 
-                out=f,
-                progress_callback=progress_bar
-            )
+    filename = msg.file.name
+    if filename is None:
+        filename = get_media_id(msg) + utils.get_extension(msg.media)
+
+    if os.path.exists(download_path):
+        if os.path.isfile(download_path):
+            filename = download_path
         else:
-            await download_file(
-                client=client, 
-                location=file, 
-                out=f,
-            )
-    return download_location
+            filename = os.path.join(download_path, filename)
+    else:
+        return None
+
+    with open(filename, "wb") as f:
+        await download_file(
+            client=client,
+            dc_id=dc_id,
+            location=location,
+            file_size=file_size,
+            out=f,
+            progress_callback=progress_callback
+        )
+    return filename
 
 async def fast_upload(client, file_location, reply=None, name=None, progress_bar_function = progress_bar_str):
     timer = Timer()
