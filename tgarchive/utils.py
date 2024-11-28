@@ -19,6 +19,7 @@ def get_media_id(msg):
 def get_photo_location(photo, thumb = None):
     """Specialized version of .download_media() for photos"""
     # Determine the photo and its largest size
+    dc_id = None
     if isinstance(photo, types.MessageMediaPhoto):
         photo = photo.photo
         dc_id = photo.dc_id
