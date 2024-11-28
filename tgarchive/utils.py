@@ -82,7 +82,7 @@ def human_readable_size(size, decimal_places=2):
         size /= 1024.0
     return f"{size:.{decimal_places}f} {unit}"
 
-async def fast_download(client, msg, download_path: str, thumb = None, progress_callback = None):
+async def fast_download(client, msg, download_folder: str, filename = None, thumb = None, progress_callback = None):
     timer = Timer()
 
     if msg.document is not None:
@@ -92,15 +92,16 @@ async def fast_download(client, msg, download_path: str, thumb = None, progress_
     else:
         return None
 
-    filename = msg.file.name
+    if filename is None:
+        filename = msg.file.name
     if filename is None:
         filename = get_media_id(msg) + utils.get_extension(msg.media)
 
-    if os.path.exists(download_path):
-        if os.path.isfile(download_path):
-            filename = download_path
+    if os.path.exists(download_folder):
+        if os.path.isfile(download_folder):
+            filename = download_folder
         else:
-            filename = os.path.join(download_path, filename)
+            filename = os.path.join(download_folder, filename)
     else:
         return None
 
