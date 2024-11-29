@@ -325,7 +325,7 @@ class Sync:
                     logging.info("checking media id: {}, name: {} in cache".format(media_id, msg.file.name))
                     if media_id is None:
                         raise
-                    cache = self.db.get_media(media_id, msg.file.id if getattr(msg, "document", None) is not None else None)
+                    cache = self.db.get_media(media_id, None)
                     if cache is not None:
                         logging.info("found media id: {} in cache".format(media_id))
                         return cache
