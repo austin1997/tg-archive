@@ -88,6 +88,23 @@ class DownloadSender:
         self.remaining -= 1
         self.request.offset += self.stride
         return result.bytes
+    
+    async def run(self, queue: asyncio.Queue, file: BinaryIO, process_callback: None):
+        while True:
+            offset = await queue.get()
+            self.request.offset = offset
+            result = await self.client._call(self.sender, self.request)
+            file.seek(offset)
+            # TODO: async write
+            file.write(result.bytes)
+            if process_callback:
+                r = process_callback(len(result.bytes), None)
+                if inspect.isawaitable(r):
+                    try:
+                        await r
+                    except BaseException:
+                        pass
+            queue.task_done()
 
     def disconnect(self) -> Awaitable[None]:
         return self.sender.disconnect()
@@ -295,8 +312,9 @@ class ParallelTransferrer:
         part_size_kb: Optional[float] = None,
         connection_count: Optional[int] = None,
     ) -> AsyncGenerator[bytes, None]:
-        connection_count = connection_count or self._get_connection_count(file_size)
+        # connection_count = connection_count or self._get_connection_count(file_size)
         part_size = (part_size_kb or utils.get_appropriated_part_size(file_size)) * 1024
+        connection_count = connection_count or (min(part_size, 20))
         part_count = math.ceil(file_size / part_size)
         await self._init_download(connection_count, file, part_count, part_size)
 
@@ -311,6 +329,41 @@ class ParallelTransferrer:
                     break
                 yield data
                 part += 1
+        await self._cleanup()
+
+    async def download_parallel(
+        self,
+        out_file: BinaryIO,
+        file: TypeLocation,
+        file_size: int,
+        part_size_kb: Optional[float] = None,
+        connection_count: Optional[int] = None,
+        process_callback = None
+    ):
+        part_size = (part_size_kb or utils.get_appropriated_part_size(file_size)) * 1024
+        connection_count = connection_count or (min(part_size, 20))
+        part_count = math.ceil(file_size / part_size)
+        await self._init_download(connection_count, file, part_count, part_size)
+
+        out_file.seek(0)
+        out_file.write(b"\0" * file_size)
+        out_file.seek(0)
+        out_file.truncate(file_size)
+
+        queue = asyncio.Queue()
+        for i in range(0, file_size, part_size):
+            queue.put_nowait(i)
+
+        tasks = []
+        for sender in self.senders:
+            task = asyncio.create_task(sender.run(queue, out_file, process_callback))
+            tasks.append(task)
+
+        await queue.join()
+        # Cancel our worker tasks.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await self._cleanup()
 
 
@@ -388,6 +441,28 @@ async def download_file(
                     await r
                 except BaseException:
                     pass
+
+    return out
+
+async def download_file_parallel(
+    client: TelegramClient,
+    dc_id: int,
+    location: TypeLocation,
+    file_size: int,
+    out: BinaryIO,
+    progress_callback: callable = None,
+) -> BinaryIO:
+    # We lock the transfers because telegram has connection count limits
+    downloader = ParallelTransferrer(client, dc_id)
+
+    if progress_callback:
+        r = progress_callback(0, file_size)
+        if inspect.isawaitable(r):
+            try:
+                await r
+            except BaseException:
+                pass
+    await downloader.download_parallel(out, location, file_size, process_callback=progress_callback)
 
     return out
 

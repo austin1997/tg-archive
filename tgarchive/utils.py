@@ -6,7 +6,7 @@ import datetime as dt
 from telethon import utils, client
 from telethon.tl import types
 
-from .FastTelethon import upload_file, download_file
+from .FastTelethon import upload_file, download_file, download_file_parallel
 
 def get_media_id(msg):
     media_id = None
@@ -105,7 +105,7 @@ async def fast_download(client, msg, download_folder: str, filename = None, thum
         return None
 
     with open(filename, "wb") as f:
-        await download_file(
+        await download_file_parallel(
             client=client,
             dc_id=dc_id,
             location=location,
