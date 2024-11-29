@@ -37,8 +37,8 @@ class Sync:
         base_dir = os.path.basename(media_dir)
         parent_dir = os.path.dirname(media_dir)
         media_tmp_dir = os.path.join(parent_dir, base_dir + "_tmp")
-        if not os.path.exists(self.config["media_dir"]):
-            os.mkdir(self.config["media_dir"])
+        if not os.path.exists(media_dir):
+            os.mkdir(media_dir)
 
         if os.path.exists(media_tmp_dir):
             shutil.rmtree(media_tmp_dir)

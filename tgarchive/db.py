@@ -185,20 +185,23 @@ class DB:
     def get_media(self, media_id: int, old_media_id: str = None):
         res = None
         if old_media_id is not None:
-            cur = self.conn.execute("""
-                SELECT id, type, url, title, description, thumb
-                FROM old_media
-                WHERE id = ?
-                """, (old_media_id,))
-            res = cur.fetchone()
-            if res is not None:
-                _, media_type, media_url, media_title, desc, media_thumb = res
-                return Media(id=media_id,
-                            type=media_type,
-                            url=media_url,
-                            title=media_title,
-                            description=desc,
-                            thumb=media_thumb)
+            try:
+                cur = self.conn.execute("""
+                    SELECT id, type, url, title, description, thumb
+                    FROM old_media
+                    WHERE id = ?
+                    """, (old_media_id,))
+                res = cur.fetchone()
+                if res is not None:
+                    _, media_type, media_url, media_title, desc, media_thumb = res
+                    return Media(id=media_id,
+                                type=media_type,
+                                url=media_url,
+                                title=media_title,
+                                description=desc,
+                                thumb=media_thumb)
+            except:
+                pass
         cur = self.conn.execute("""
                 SELECT id, type, url, title, description, thumb
                 FROM media
