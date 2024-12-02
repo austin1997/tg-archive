@@ -84,7 +84,7 @@ class DownloadSender:
     async def next(self) -> Optional[bytes]:
         if not self.remaining:
             return None
-        if self.client.session.takeout_id:
+        if self.client.session.takeout_id is None:
             request = self.request
         else:
             request = InvokeWithTakeoutRequest(self.client.session.takeout_id, self.request)
@@ -97,7 +97,7 @@ class DownloadSender:
         while True:
             offset = await queue.get()
             self.request.offset = offset
-            if self.client.session.takeout_id:
+            if self.client.session.takeout_id is None:
                 request = self.request
             else:
                 request = InvokeWithTakeoutRequest(self.client.session.takeout_id, self.request)
