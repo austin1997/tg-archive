@@ -24,7 +24,7 @@ from telethon import TelegramClient, helpers, utils
 from telethon.crypto import AuthKey
 from telethon.network import MTProtoSender
 from telethon.tl.alltlobjects import LAYER
-from telethon.tl.functions import InvokeWithLayerRequest
+from telethon.tl.functions import InvokeWithLayerRequest, InvokeWithTakeoutRequest
 from telethon.tl.functions.auth import (
     ExportAuthorizationRequest,
     ImportAuthorizationRequest,
@@ -61,7 +61,7 @@ TypeLocation = Union[
 class DownloadSender:
     client: TelegramClient
     sender: MTProtoSender
-    request: GetFileRequest
+    request: GetFileRequest | InvokeWithTakeoutRequest
     remaining: int
     stride: int
 
@@ -84,7 +84,11 @@ class DownloadSender:
     async def next(self) -> Optional[bytes]:
         if not self.remaining:
             return None
-        result = await self.client._call(self.sender, self.request)
+        if self.client.session.takeout_id:
+            request = self.request
+        else:
+            request = InvokeWithTakeoutRequest(self.client.session.takeout_id, self.request)
+        result = await self.client._call(self.sender, request)
         self.remaining -= 1
         self.request.offset += self.stride
         return result.bytes
@@ -93,7 +97,11 @@ class DownloadSender:
         while True:
             offset = await queue.get()
             self.request.offset = offset
-            result = await self.client._call(self.sender, self.request)
+            if self.client.session.takeout_id:
+                request = self.request
+            else:
+                request = InvokeWithTakeoutRequest(self.client.session.takeout_id, self.request)
+            result = await self.client._call(self.sender, request)
             file.seek(offset)
             # TODO: async write
             file.write(result.bytes)
