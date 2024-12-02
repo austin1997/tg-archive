@@ -358,21 +358,23 @@ class ParallelTransferrer:
         out_file.seek(0)
         out_file.truncate(file_size)
 
-        queue = asyncio.Queue()
-        for i in range(0, file_size, part_size):
-            queue.put_nowait(i)
+        try:
+            queue = asyncio.Queue()
+            for i in range(0, file_size, part_size):
+                queue.put_nowait(i)
 
-        tasks = []
-        for sender in self.senders:
-            task = asyncio.create_task(sender.run(queue, out_file, process_callback))
-            tasks.append(task)
+            tasks = []
+            for sender in self.senders:
+                task = asyncio.create_task(sender.run(queue, out_file, process_callback))
+                tasks.append(task)
 
-        await queue.join()
-        # Cancel our worker tasks.
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        await self._cleanup()
+            await queue.join()
+            # Cancel our worker tasks.
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            await self._cleanup()
 
 
 parallel_transfer_locks: DefaultDict[int, asyncio.Lock] = defaultdict(
