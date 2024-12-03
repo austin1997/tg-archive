@@ -339,6 +339,9 @@ class Sync:
                         description=None,
                         thumb=thumb
                     )
+                except (errors.FilerefUpgradeNeededError, errors.FileReferenceExpiredError) as e:
+                    msg = self.client.get_messages(await msg.get_input_chat(), ids=msg.id)
+                    return await self._get_media(msg)
                 except Exception as e:
                     logging.error(
                         "error downloading media: #{}: {}".format(msg.id, e))
