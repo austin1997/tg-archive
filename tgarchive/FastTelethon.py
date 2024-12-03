@@ -383,10 +383,10 @@ class ParallelTransferrer:
         out_file.seek(0)
         out_file.truncate(file_size)
 
-        file_hashes: list[FileHash] = await self.client(GetFileHashesRequest(file, 0))
-        file_hashes_dict: dict[int, FileHash] = {}
-        for file_hash in file_hashes:
-            file_hashes_dict[file_hash.offset] = file_hash
+        # file_hashes: list[FileHash] = await self.client(GetFileHashesRequest(file, 0))
+        # file_hashes_dict: dict[int, FileHash] = {}
+        # for file_hash in file_hashes:
+        #     file_hashes_dict[file_hash.offset] = file_hash
 
         try:
             queue = asyncio.Queue()
@@ -395,7 +395,7 @@ class ParallelTransferrer:
 
             tasks = []
             for sender in self.senders:
-                task = asyncio.create_task(sender.run(queue, out_file, file_hashes_dict, process_callback))
+                task = asyncio.create_task(sender.run(queue, out_file, None, process_callback))
                 tasks.append(task)
 
             await queue.join()
