@@ -322,8 +322,8 @@ class ParallelTransferrer:
     ) -> AsyncGenerator[bytes, None]:
         # connection_count = connection_count or self._get_connection_count(file_size)
         part_size = (part_size_kb or utils.get_appropriated_part_size(file_size)) * 1024
-        connection_count = connection_count or (min(part_size, 8))
         part_count = math.ceil(file_size / part_size)
+        connection_count = connection_count or (min(part_count, 8))
         await self._init_download(connection_count, file, part_count, part_size)
 
         part = 0
@@ -349,8 +349,8 @@ class ParallelTransferrer:
         process_callback = None
     ):
         part_size = (part_size_kb or utils.get_appropriated_part_size(file_size)) * 1024
-        connection_count = connection_count or (min(part_size, 8))
         part_count = math.ceil(file_size / part_size)
+        connection_count = connection_count or (min(part_count, 8))
         await self._init_download(connection_count, file, part_count, part_size)
 
         out_file.seek(0)
@@ -472,7 +472,7 @@ async def download_file_parallel(
                 await r
             except BaseException:
                 pass
-    await downloader.download_parallel(out, location, file_size, process_callback=progress_callback)
+    await downloader.download_parallel(out, location, file_size, part_size_kb=1024, process_callback=progress_callback)
 
     return out
 
