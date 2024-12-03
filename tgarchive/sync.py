@@ -7,6 +7,7 @@ import tempfile
 import shutil
 import time
 import traceback
+import asyncio
 
 from PIL import Image
 from telethon import TelegramClient, errors
@@ -339,6 +340,11 @@ class Sync:
                         description=None,
                         thumb=thumb
                     )
+                except (errors.FloodWaitError, errors.FloodPremiumWaitError) as e:
+                    logging.info(f"Sleeping for {e.seconds + 60} seconds." + e._fmt_request(e.request))
+                    await asyncio.sleep(e.seconds + 60)
+                    # retry download
+                    return await self._get_media(msg)
                 except (errors.FilerefUpgradeNeededError, errors.FileReferenceExpiredError) as e:
                     msg = self.client.get_messages(await msg.get_input_chat(), ids=msg.id)
                     return await self._get_media(msg)
