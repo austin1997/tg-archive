@@ -8,6 +8,7 @@ import inspect
 import logging
 import math
 import os
+import hashlib
 from collections import defaultdict
 from typing import (
     AsyncGenerator,
@@ -33,6 +34,7 @@ from telethon.tl.functions.upload import (
     GetFileRequest,
     SaveBigFilePartRequest,
     SaveFilePartRequest,
+    GetFileHashesRequest
 )
 from telethon.tl.types import (
     Document,
@@ -43,6 +45,7 @@ from telethon.tl.types import (
     InputPeerPhotoFileLocation,
     InputPhotoFileLocation,
     TypeInputFile,
+    FileHash
 )
 
 filename = ""
@@ -93,7 +96,7 @@ class DownloadSender:
         self.request.offset += self.stride
         return result.bytes
     
-    async def run(self, queue: asyncio.Queue, file: BinaryIO, process_callback: None):
+    async def run(self, queue: asyncio.Queue, file: BinaryIO, file_hashes: dict[int, FileHash] = None, process_callback = None):
         while True:
             offset = await queue.get()
             self.request.offset = offset
@@ -101,12 +104,34 @@ class DownloadSender:
                 request = self.request
             else:
                 request = InvokeWithTakeoutRequest(self.client.session.takeout_id, self.request)
-            result = await self.client._call(self.sender, request)
+            verified = False
+            while not verified:
+                result = await self.client._call(self.sender, request)
+                result = result.bytes
+                if not file_hashes:
+                    break
+                verified = True
+                hash_offset = offset
+                while hash_offset < offset + len(result):
+                    file_hash = file_hashes.get(hash_offset, None)
+                    if not file_hash:
+                        logging.info(f"file_hash does not found at {hash_offset}. Skipped")
+                        break
+                    if file_hash.offset + file_hash.limit > offset + len(result):
+                        logging.info(f"file_hash exceed downloaded part, offset: {file_hash.offset}, limit: {file_hash.limit}, local_offset: {offset}. Skipped")
+                        break
+                    local_hash = hashlib.sha256(result[hash_offset - offset:hash_offset + file_hash.limit]).digest()
+                    if local_hash != file_hash.hash:
+                        logging.info(f"file_hash verified failed, offset: {file_hash.offset}, limit: {file_hash.limit}, local_offset: {offset}. Redownloading...")
+                        verified = False
+                        break
+                    hash_offset += file_hash.limit
+
             file.seek(offset)
             # TODO: async write
-            file.write(result.bytes)
+            file.write(result)
             if process_callback:
-                r = process_callback(len(result.bytes), None)
+                r = process_callback(len(result), None)
                 if inspect.isawaitable(r):
                     try:
                         await r
@@ -358,6 +383,11 @@ class ParallelTransferrer:
         out_file.seek(0)
         out_file.truncate(file_size)
 
+        file_hashes: list[FileHash] = await self.client(GetFileHashesRequest(file, 0))
+        file_hashes_dict: dict[int, FileHash] = {}
+        for file_hash in file_hashes:
+            file_hashes_dict[file_hash.offset] = file_hash
+
         try:
             queue = asyncio.Queue()
             for i in range(0, file_size, part_size):
@@ -365,7 +395,7 @@ class ParallelTransferrer:
 
             tasks = []
             for sender in self.senders:
-                task = asyncio.create_task(sender.run(queue, out_file, process_callback))
+                task = asyncio.create_task(sender.run(queue, out_file, file_hashes_dict, process_callback))
                 tasks.append(task)
 
             await queue.join()
