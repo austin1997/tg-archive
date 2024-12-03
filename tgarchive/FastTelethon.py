@@ -399,11 +399,11 @@ class ParallelTransferrer:
                 tasks.append(task)
 
             await queue.join()
+        finally:
             # Cancel our worker tasks.
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-        finally:
             await self._cleanup()
 
 
