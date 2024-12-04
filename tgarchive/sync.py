@@ -83,8 +83,6 @@ class Sync:
                 else:
                     self.client.loop.run_until_complete(self._async(ids, from_id))
         except KeyboardInterrupt as e:
-            if self.downloader is not None:
-                await self.downloader._cleanup()
             logging.info("sync cancelled manually")
             raise e
         except:
@@ -113,28 +111,31 @@ class Sync:
                 last_id, last_date))
 
         n = 0
-        async for msg in self.client.iter_messages(group_entity, reverse=True, offset_id=last_id if last_id is not None else 0, ids=ids):
-            
-            m = await self._get_message(msg)
-            
-            if m is None:
-                continue
+        try:
+            async for msg in self.client.iter_messages(group_entity, reverse=True, offset_id=last_id if last_id is not None else 0, ids=ids):
+                
+                m = await self._get_message(msg)
+                
+                if m is None:
+                    continue
 
-            # Insert the records into DB.
-            self.db.insert_user(m.user)
+                # Insert the records into DB.
+                self.db.insert_user(m.user)
 
-            if m.media:
-                self.db.insert_media(m.media)
+                if m.media:
+                    self.db.insert_media(m.media)
 
-            self.db.insert_message(group_id, m)
+                self.db.insert_message(group_id, m)
 
-            last_date = m.date
-            n += 1
-            if n % 300 == 0:
-                logging.info("fetched {} messages".format(n))
+                last_date = m.date
+                n += 1
+                if n % 300 == 0:
+                    logging.info("fetched {} messages".format(n))
+                    self.db.commit()
+
                 self.db.commit()
-
-            self.db.commit()
+        finally:
+            await self.downloader._cleanup()
 
         self.db.commit()
         # if self.config.get("use_takeout", False):
