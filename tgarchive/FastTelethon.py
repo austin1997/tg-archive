@@ -218,11 +218,9 @@ class ParallelTransferrer:
                 sender.reset_file(file, part_size)
             return
         
-        self.auth_key = (
-            None
-            if dc_id and self.client.session.dc_id != dc_id
-            else self.client.session.auth_key
-        )
+        self.auth_key = None
+        if self.client.session.dc_id == dc_id:
+            self.auth_key = self.client.session.auth_key
         # The first cross-DC sender will export+import the authorization, so we always create it
         # before creating any other senders.
         self.senders = [
@@ -295,7 +293,7 @@ class ParallelTransferrer:
             )
         )
         if not self.auth_key:
-            auth = await self.client(ExportAuthorizationRequest(self.client.session.dc_id))
+            auth = await self.client(ExportAuthorizationRequest(dc_id))
             self.client._init_request.query = ImportAuthorizationRequest(
                 id=auth.id, bytes=auth.bytes
             )
