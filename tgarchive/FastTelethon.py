@@ -95,14 +95,14 @@ class DownloadSender:
                 request = InvokeWithTakeoutRequest(self.client.session.takeout_id, self.request)
             verified = False
             while not verified:
-                result = None
-                try:
-                    result = await self.client._call(self.sender, request)
-                except (errors.FloodWaitError, errors.FloodPremiumWaitError) as e:
-                    logging.info(f"Sleeping for {e.seconds + 60} seconds." + e._fmt_request(e.request))
-                    await asyncio.sleep(e.seconds + 60)
-                    # retry download
-                    result = await self.client._call(self.sender, request)
+                result = await self.client._call(self.sender, request)
+                # try:
+                #     result = await self.client._call(self.sender, request)
+                # except (errors.FloodWaitError, errors.FloodPremiumWaitError) as e:
+                #     logging.info(f"Sleeping for {e.seconds + 60} seconds." + e._fmt_request(e.request))
+                #     await asyncio.sleep(e.seconds + 60)
+                #     # retry download
+                #     result = await self.client._call(self.sender, request)
                 assert result is not None
                 result = result.bytes
                 if not file_hashes:
