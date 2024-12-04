@@ -295,7 +295,7 @@ class ParallelTransferrer:
             )
         )
         if not self.auth_key:
-            auth = await self.client(ExportAuthorizationRequest(self.dc_id))
+            auth = await self.client(ExportAuthorizationRequest(self.client.session.dc_id))
             self.client._init_request.query = ImportAuthorizationRequest(
                 id=auth.id, bytes=auth.bytes
             )
