@@ -17,7 +17,7 @@ from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from .db import User, Message, Media, DB
-from . import utils
+from . import utils,FastTelethon
 
 
 class Sync:
@@ -46,6 +46,7 @@ class Sync:
         os.mkdir(media_tmp_dir)
         self.media_dir = media_dir
         self.media_tmp_dir = media_tmp_dir
+        self.downloader = None
 
     def sync(self, ids=None, from_id=None):
         client = self.client
@@ -82,6 +83,8 @@ class Sync:
                 else:
                     self.client.loop.run_until_complete(self._async(ids, from_id))
         except KeyboardInterrupt as e:
+            if self.downloader is not None:
+                self.downloader._cleanup()
             logging.info("sync cancelled manually")
             raise e
         except:
@@ -92,7 +95,8 @@ class Sync:
         Sync syncs messages from Telegram from the last synced message
         into the local SQLite DB.
         """
-
+        if self.downloader is None:
+            self.downloader = FastTelethon.ParallelTransferrer(self.client)
         group_entity = await self._get_group_entity(self.config["group"])
         group_id = group_entity.id
         self.db.create_chat_table(group_id, group_entity.title)
@@ -366,7 +370,7 @@ class Sync:
 
         with logging_redirect_tqdm():
             with tqdm(desc=msg.file.name, total=msg.file.size, unit='B', unit_scale=True, unit_divisor=1024, miniters=1) as pbar:
-                tmpfile_path = await utils.fast_download(self.client, msg, download_folder=self.media_tmp_dir, filename=msg.file.name, progress_callback=progress_callback2, **kwargs)
+                tmpfile_path = await self.downloader.download(msg, download_folder=self.media_tmp_dir, filename=msg.file.name, progress_callback=progress_callback2, **kwargs)
                 basename = os.path.basename(tmpfile_path)
                 destination_path = os.path.join(self.media_dir, f"{rename_prefix}{basename}")
                 if os.path.exists(destination_path): # Create a new name if the file already exists
