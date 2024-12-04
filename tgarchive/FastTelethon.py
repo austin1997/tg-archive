@@ -21,7 +21,7 @@ from typing import (
     Union,
 )
 
-from telethon import TelegramClient, helpers
+from telethon import TelegramClient, helpers, errors
 from telethon import utils as telethon_utils
 from telethon.crypto import AuthKey
 from telethon.network import MTProtoSender
@@ -95,7 +95,15 @@ class DownloadSender:
                 request = InvokeWithTakeoutRequest(self.client.session.takeout_id, self.request)
             verified = False
             while not verified:
-                result = await self.client._call(self.sender, request)
+                result = None
+                try:
+                    result = await self.client._call(self.sender, request)
+                except (errors.FloodWaitError, errors.FloodPremiumWaitError) as e:
+                    logging.info(f"Sleeping for {e.seconds + 60} seconds." + e._fmt_request(e.request))
+                    await asyncio.sleep(e.seconds + 60)
+                    # retry download
+                    result = await self.client._call(self.sender, request)
+                assert result is not None
                 result = result.bytes
                 if not file_hashes:
                     break

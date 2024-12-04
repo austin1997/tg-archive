@@ -84,7 +84,7 @@ class Sync:
                     self.client.loop.run_until_complete(self._async(ids, from_id))
         except KeyboardInterrupt as e:
             if self.downloader is not None:
-                self.downloader._cleanup()
+                await self.downloader._cleanup()
             logging.info("sync cancelled manually")
             raise e
         except:
