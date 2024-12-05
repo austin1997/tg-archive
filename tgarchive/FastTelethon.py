@@ -192,7 +192,7 @@ class ParallelTransferrer:
     senders: Optional[List[Union[DownloadSender, UploadSender]]]
     auth_key: AuthKey
     upload_ticker: int
-    sender_pool: dict[int, Union[DownloadSender, UploadSender]]
+    sender_pool: dict[int, List[Union[DownloadSender, UploadSender]]]
 
     def __init__(self, client: TelegramClient) -> None:
         self.client = client
@@ -205,6 +205,9 @@ class ParallelTransferrer:
     async def _cleanup(self) -> None:
         await asyncio.gather(*[sender.disconnect() for sender in self.senders])
         self.senders = None
+        for senders in self.sender_pool:
+            for sender in senders:
+                sender.disconnect()
         self.sender_pool.clear()
 
     @staticmethod
@@ -304,8 +307,8 @@ class ParallelTransferrer:
                 id=auth.id, bytes=auth.bytes
             )
             req = InvokeWithLayerRequest(LAYER, self.client._init_request)
-            if self.client.session.takeout_id is not None:
-                req = InvokeWithTakeoutRequest(self.client.session.takeout_id, req)
+            # if self.client.session.takeout_id is not None:
+            #     req = InvokeWithTakeoutRequest(self.client.session.takeout_id, req)
             await sender.send(req)
             self.auth_key = sender.auth_key
         return sender
