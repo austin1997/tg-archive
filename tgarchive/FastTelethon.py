@@ -87,6 +87,7 @@ class DownloadSender:
         while True:
             offset = await queue.get()
             self.request.offset = offset
+            # logging.info(f"request limit = {self.request.limit}")
             if self.client.session.takeout_id is None:
                 request = self.request
             else:
@@ -95,6 +96,7 @@ class DownloadSender:
             while not verified:
                 result = None
                 try:
+                    # logging.info("invoking request")
                     result = await self.client._call(self.sender, request)
                 except (errors.FloodWaitError, errors.FloodPremiumWaitError) as e:
                     logging.info(f"Sleeping for {e.seconds + 60} seconds." + e._fmt_request(e.request))
@@ -205,7 +207,7 @@ class ParallelTransferrer:
     async def _cleanup(self) -> None:
         await asyncio.gather(*[sender.disconnect() for sender in self.senders])
         self.senders = None
-        for senders in self.sender_pool:
+        for dc, senders in self.sender_pool.items():
             for sender in senders:
                 sender.disconnect()
         self.sender_pool.clear()
