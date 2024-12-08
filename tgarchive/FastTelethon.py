@@ -9,6 +9,7 @@ import logging
 import math
 import os
 import hashlib
+from datetime import datetime
 from collections import defaultdict
 from typing import (
     AsyncGenerator,
@@ -194,7 +195,7 @@ class ParallelTransferrer:
     senders: Optional[List[Union[DownloadSender, UploadSender]]]
     auth_key: AuthKey
     upload_ticker: int
-    sender_pool: dict[int, List[Union[DownloadSender, UploadSender]]]
+    sender_pool: dict[int, Tuple[List[Union[DownloadSender, UploadSender]], datetime]]
 
     def __init__(self, client: TelegramClient) -> None:
         self.client = client
@@ -208,8 +209,9 @@ class ParallelTransferrer:
         await asyncio.gather(*[sender.disconnect() for sender in self.senders])
         self.senders = None
         for dc, senders in self.sender_pool.items():
+            senders, _ = senders
             for sender in senders:
-                sender.disconnect()
+                await sender.disconnect()
         self.sender_pool.clear()
 
     @staticmethod
@@ -223,11 +225,18 @@ class ParallelTransferrer:
     async def _init_download(
         self, connections: int, dc_id: int, file: TypeLocation, part_size: int
     ) -> None:
-        self.senders = self.sender_pool.get(dc_id, None)
+        curr_time = datetime.now()
+        self.senders, created_time = self.sender_pool.get(dc_id, (None, None))
         if self.senders is not None:
-            for sender in self.senders:
-                sender.reset_file(file, part_size)
-            return
+            time_diff = curr_time - created_time
+            if time_diff.total_seconds() < 1800:
+                for sender in self.senders:
+                    sender.reset_file(file, part_size)
+                return
+            else:
+                logging.info("Clearing long-lasting connections and reconnect")
+                for sender in self.senders:
+                    await sender.disconnect()
         
         self.auth_key = None
         if self.client.session.dc_id == dc_id:
@@ -247,7 +256,7 @@ class ParallelTransferrer:
                 ]
             ),
         ]
-        self.sender_pool[dc_id] = self.senders
+        self.sender_pool[dc_id] = (self.senders, curr_time)
 
     async def _create_download_sender(
         self,
