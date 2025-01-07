@@ -63,6 +63,8 @@ TypeLocation = Union[
     InputPhotoFileLocation,
 ]
 
+MAX_CONNECTION_LIFETIME: int = 3600
+
 
 class DownloadSender:
     client: TelegramClient
@@ -84,8 +86,8 @@ class DownloadSender:
     def reset_file(self, file: TypeLocation, part_size):
         self.request = GetFileRequest(file, 0, limit=part_size)
 
-    async def run(self, queue: asyncio.Queue, file: BinaryIO, file_hashes: dict[int, FileHash] = None, process_callback = None):
-        while True:
+    async def run(self, queue: asyncio.Queue, file: BinaryIO, connection_created: datetime, file_hashes: dict[int, FileHash] = None, process_callback = None):
+        while not queue.empty() and (datetime.now() - connection_created).total_seconds() < MAX_CONNECTION_LIFETIME:
             offset = await queue.get()
             self.request.offset = offset
             # logging.info(f"request limit = {self.request.limit}")
@@ -224,7 +226,7 @@ class ParallelTransferrer:
 
     async def _init_download(
         self, connections: int, dc_id: int, file: TypeLocation, part_size: int
-    ) -> None:
+    ) -> datetime:
         curr_time = datetime.now()
         self.senders, created_time = self.sender_pool.get(dc_id, (None, None))
         if self.senders is not None:
@@ -232,7 +234,7 @@ class ParallelTransferrer:
             if time_diff.total_seconds() < 1800:
                 for sender in self.senders:
                     sender.reset_file(file, part_size)
-                return
+                return created_time
             else:
                 logging.info("Clearing long-lasting connections and reconnect")
                 for sender in self.senders:
@@ -257,6 +259,7 @@ class ParallelTransferrer:
             ),
         ]
         self.sender_pool[dc_id] = (self.senders, curr_time)
+        return curr_time
 
     async def _create_download_sender(
         self,
@@ -400,7 +403,6 @@ class ParallelTransferrer:
         part_size = (part_size_kb or telethon_utils.get_appropriated_part_size(file_size)) * 1024
         # connection_count = connection_count or (min(part_count, 8))
         connection_count = 8
-        await self._init_download(connection_count, dc_id, file, part_size)
 
         out_file.seek(0)
         out_file.write(b"\0" * file_size)
@@ -417,11 +419,13 @@ class ParallelTransferrer:
             for i in range(0, file_size, part_size):
                 queue.put_nowait(i)
 
-            tasks = []
-            for sender in self.senders:
-                task = asyncio.create_task(sender.run(queue, out_file, None, process_callback))
-                tasks.append(task)
-
+            while not queue.empty():
+                connection_created_time = await self._init_download(connection_count, dc_id, file, part_size)
+                tasks = []
+                for sender in self.senders:
+                    task = asyncio.create_task(sender.run(queue, out_file, connection_created_time, None, process_callback))
+                    tasks.append(task)
+                await asyncio.gather(*tasks, return_exceptions=True)
             await queue.join()
         finally:
             # Cancel our worker tasks.

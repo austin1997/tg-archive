@@ -283,7 +283,7 @@ class Sync:
         if not msg.media.results or not msg.media.results.results:
             return None
 
-        options = [{"label": a.text, "count": 0, "correct": False}
+        options = [{"label": a.text.text, "count": 0, "correct": False}
                    for a in msg.media.poll.answers]
 
         total = msg.media.results.total_voters
@@ -293,12 +293,12 @@ class Sync:
                 options[i]["percent"] = r.voters / \
                     total * 100 if total > 0 else 0
                 options[i]["correct"] = r.correct
-
+        logging.info("poll options: {}".format(options))
         return Media(
             id=msg.id,
             type="poll",
             url=None,
-            title=msg.media.poll.question,
+            title=msg.media.poll.question.text,
             description=json.dumps(options),
             thumb=None
         )
