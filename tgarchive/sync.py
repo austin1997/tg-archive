@@ -20,6 +20,7 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 from tgarchive.db import User, Message, Media, Poll, WebPage, DB
 from tgarchive import utils,FastTelethon
+import tgarchive.worker as worker
 
 
 class Sync:
@@ -95,52 +96,15 @@ class Sync:
         Sync syncs messages from Telegram from the last synced message
         into the local SQLite DB.
         """
-        if self.downloader is None:
-            self.downloader = FastTelethon.ParallelTransferrer(self.client)
-        group_entity = await self._get_group_entity(self.config["group"])
-        group_id = group_entity.id
-        self.db.create_chat_table(group_id, group_entity.title)
+        _ = await self.client.get_dialogs()
+        chat_queue = asyncio.Queue()
+        msg_queue = asyncio.Queue()
+        for group in self.config["groups"]:
+            chat_queue.put_nowait((group, from_id))
+        
+        group_workers = [worker.GroupWorker(msg_queue, chat_queue, self.client, self.db)] * len(self.config["groups"])
 
-        if ids is not None:
-            last_id, last_date = (ids, None)
-            logging.info("fetching message id={}".format(ids))
-        elif from_id is not None:
-            last_id, last_date = (from_id, None)
-            logging.info("fetching from last message id={}".format(last_id))
-        else:
-            last_id, last_date = self.db.get_last_message_id(group_id)
-            logging.info("fetching from last message id={} ({})".format(
-                last_id, last_date))
 
-        n = 0
-        try:
-            async for msg in self.client.iter_messages(group_entity, reverse=True, offset_id=last_id if last_id is not None else 0, ids=ids):
-                
-                m = await self._get_message(msg)
-                
-                if m is None:
-                    continue
-
-                # Insert the records into DB.
-                self.db.insert_user(m.user)
-
-                self.db.insert_message(group_id, m)
-
-                last_date = m.date
-                n += 1
-                if n % 300 == 0:
-                    logging.info("fetched {} messages".format(n))
-                    self.db.commit()
-
-                self.db.commit()
-        finally:
-            await self.downloader._cleanup()
-
-        self.db.commit()
-        # if self.config.get("use_takeout", False):
-        #     await self.finish_takeout()
-        logging.info(
-            "finished. fetched {} messages. last message = {}".format(n, last_date))
 
     def new_client(self, session, config):
         if "proxy" in config and config["proxy"].get("enable"):
@@ -415,14 +379,6 @@ class Sync:
 
         return basename, newname, tname
 
-    def _get_file_ext(self, f) -> str:
-        if "." in f:
-            e = f.split(".")[-1]
-            if len(e) < 6:
-                return e
-
-        return ".file"
-
     async def _download_avatar(self, user):
         fname = "avatar_{}.jpg".format(user.id)
         fpath = os.path.join(self.config["media_dir"], fname)
@@ -449,8 +405,6 @@ class Sync:
         # Get all dialogs for the authorized user, which also
         # syncs the entity cache to get latest entities
         # ref: https://docs.telethon.dev/en/latest/concepts/entities.html#getting-entities
-        _ = await self.client.get_dialogs()
-
         try:
             # If the passed group is a group ID, extract it.
             group = int(group)
@@ -468,15 +422,6 @@ class Sync:
             exit(1)
 
         return entity
-
-    def _get_group_id(self, group):
-        """
-        Syncs the Entity cache and returns the Entity ID for the specified group,
-        which can be a str/int for group ID, group name, or a group username.
-
-        The authorized user must be a part of the group.
-        """
-        return self._get_group_entity(group).id
 
     async def _downloadAvatarForUserOrChat(self, entity):
         avatar = None

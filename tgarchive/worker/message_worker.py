@@ -72,11 +72,12 @@ class MessageWorker:
                 )
                 media_id = 1
                 self.db.insert_webpage(webpage)
-            if self.config["download_media"] and \
+            elif self.config["download_media"] and \
                 isinstance(msg.media, (telethon.tl.types.MessageMediaPhoto,
                                        telethon.tl.types.MessageMediaDocument,
                                        telethon.tl.types.MessageMediaContact)):
                 media_id = await self._get_media(msg)
+                await self.downloader_queue.put(msg)
             else:
                 logging.info("unknown media type: {}".format(msg.media))
 
@@ -99,8 +100,6 @@ class MessageWorker:
                     logging.info(
                         "skipping media #{} / {}".format(msg.file.name, msg.file.mime_type))
                     return None
-
-        await self.downloader_queue.put(msg)
         return utils.get_media_id(msg)
 
     async def _download_avatar(self, user):

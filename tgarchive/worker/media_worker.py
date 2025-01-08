@@ -22,13 +22,17 @@ class MediaWorker:
         self.downloader = FastTelethon.ParallelTransferrer(self.client)
     
     async def run(self):
-        while True:
-            msg: telethon.tl.custom.Message = await self.input_queue.get()
-            if msg is None:
-                break
-            media = self._handle_message(msg)
-            self.db.insert_media(media)
-            self.db.commit()
+        try:
+            while True:
+                msg: telethon.tl.custom.Message = await self.input_queue.get()
+                if msg is None:
+                    break
+                media = self._handle_message(msg)
+                self.db.insert_media(media)
+                self.db.commit()
+        except asyncio.CancelledError:
+            await self.downloader._cleanup()
+            logging.info("MediaWorker cancelled.")
 
     async def _handle_message(self, msg: telethon.tl.custom.Message) -> db.Media:
         try:

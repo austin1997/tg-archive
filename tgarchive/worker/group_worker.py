@@ -30,6 +30,8 @@ class GroupWorker:
                 logging.info("fetching from last message id={} ({})".format(
                     last_id, last_date))
             
+            n = 0
             async for msg in self.client.iter_messages(group_entity, reverse=True, offset_id=last_id if last_id is not None else 0, ids=ids):
                 await self.output_queue.put(msg)
-                
+                n += 1
+            logging.info("{} finished. fetched {} messages. last message = {}".format(group_id, n, last_date))
