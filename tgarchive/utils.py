@@ -5,8 +5,9 @@ import time
 import datetime as dt
 from telethon import utils, client
 from telethon.tl import types
+import telethon.tl.custom
 
-def get_media_id(msg):
+def get_media_id(msg: telethon.tl.custom.Message):
     media_id = None
     if getattr(msg, "photo", None) is not None:
         media_id = msg.photo.id

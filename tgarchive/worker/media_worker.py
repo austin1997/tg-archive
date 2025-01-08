@@ -6,13 +6,14 @@ import shutil
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 import telethon
+import telethon.tl.custom
+import telethon.tl.types
 from telethon import TelegramClient, errors
 from tgarchive import db, utils, FastTelethon
 import traceback
 
 class MediaWorker:
-    def __init__(self, output_queue: asyncio.Queue, input_queue: asyncio.Queue, client: TelegramClient, database: db.DB, media_dir: str, media_tmp_dir: str):
-        self.output_queue = output_queue
+    def __init__(self, input_queue: asyncio.Queue, client: TelegramClient, database: db.DB, media_dir: str, media_tmp_dir: str):
         self.input_queue = input_queue
         self.client = client
         self.db = database
@@ -22,14 +23,14 @@ class MediaWorker:
     
     async def run(self):
         while True:
-            (message, chat_id, msg) = await self.input_queue.get()
+            msg: telethon.tl.custom.Message = await self.input_queue.get()
             if msg is None:
                 break
-            message.media = self._handle_message(msg)
-            await self.output_queue.put((chat_id, message))
-            
+            media = self._handle_message(msg)
+            self.db.insert_media(media)
+            self.db.commit()
 
-    async def _handle_message(self, msg):
+    async def _handle_message(self, msg: telethon.tl.custom.Message) -> db.Media:
         try:
             media_id = utils.get_media_id(msg)                    
             logging.info("checking media id: {}, name: {} in cache".format(media_id, msg.file.name))
@@ -62,7 +63,7 @@ class MediaWorker:
                 "error downloading media: #{}: {}".format(msg.id, e))
             traceback.print_exc()
 
-    async def _download_with_progress(self, msg, rename_prefix="", **kwargs):
+    async def _download_with_progress(self, msg: telethon.tl.custom.Message, rename_prefix="", **kwargs):
         def progress_callback(diff, total):
             if total is not None:
                 pbar.total = total
@@ -85,7 +86,7 @@ class MediaWorker:
                 shutil.move(tmpfile_path, destination_path)
                 return basename, os.path.basename(destination_path)
 
-    async def _download_media(self, msg):
+    async def _download_media(self, msg: telethon.tl.custom.Message):
         """
         Download a media / file attached to a message and return its original
         filename, sanitized name on disk, and the thumbnail (if any). 

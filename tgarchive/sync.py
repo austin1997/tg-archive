@@ -8,16 +8,18 @@ import shutil
 import time
 import traceback
 import asyncio
+from typing import Tuple
 
 from PIL import Image
 from telethon import TelegramClient, errors
+import telethon.tl.custom
 import telethon.tl.types
 
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from .db import User, Message, Media, DB
-from . import utils,FastTelethon
+from tgarchive.db import User, Message, Media, Poll, WebPage, DB
+from tgarchive import utils,FastTelethon
 
 
 class Sync:
@@ -122,9 +124,6 @@ class Sync:
                 # Insert the records into DB.
                 self.db.insert_user(m.user)
 
-                if m.media:
-                    self.db.insert_media(m.media)
-
                 self.db.insert_message(group_id, m)
 
                 last_date = m.date
@@ -167,13 +166,13 @@ class Sync:
     async def finish_takeout(self):
         await self.client.end_takeout(success=True)
 
-    async def _get_message(self, msg) -> Message:
+    async def _get_message(self, msg: telethon.tl.custom.Message) -> Tuple[Message, Media, Poll]:
         # https://docs.telethon.dev/en/latest/quick-references/objects-reference.html#message
         if msg is None:
-            return None
+            return (None, None, None)
         # Media.
         sticker = None
-        med = None
+        media_id = None
         if msg.media:
             # If it's a sticker, get the alt value (unicode emoji).
             if isinstance(msg.media, telethon.tl.types.MessageMediaDocument) and \
@@ -184,9 +183,29 @@ class Sync:
                 if len(alt) > 0:
                     sticker = alt[0]
             elif isinstance(msg.media, telethon.tl.types.MessageMediaPoll):
-                med = self._make_poll(msg)
-            else:
+                poll = self._make_poll(msg)
+                self.db.insert_poll(poll)
+                media_id = 0
+            elif isinstance(msg.media, telethon.tl.types.MessageMediaWebPage) and \
+                not isinstance(msg.media.webpage, telethon.tl.types.WebPageEmpty):
+                webpage = WebPage(
+                    chat_id=msg.chat_id,
+                    message_id=msg.id,
+                    url=msg.media.webpage.url,
+                    title=msg.media.webpage.title,
+                    description=msg.media.webpage.description if msg.media.webpage.description else None
+                )
+                media_id = 1
+                self.db.insert_webpage(webpage)
+            if self.config["download_media"] and \
+                isinstance(msg.media, (telethon.tl.types.MessageMediaPhoto,
+                                       telethon.tl.types.MessageMediaDocument,
+                                       telethon.tl.types.MessageMediaContact)):
                 med = await self._get_media(msg)
+                self.db.insert_media(med)
+                media_id = med.id
+            else:
+                logging.info("unknown media type: {}".format(msg.media))
 
         # Message.
         typ = "message"
@@ -206,24 +225,8 @@ class Sync:
             content=sticker if sticker else msg.raw_text,
             reply_to=msg.reply_to_msg_id if msg.reply_to and msg.reply_to.reply_to_msg_id else None,
             user=await self._get_user(await msg.get_sender(), await msg.get_chat()),
-            media=med
+            media_id=media_id
         )
-
-    def _fetch_messages(self, group, offset_id, ids=None) -> Message:
-        try:
-            if self.config.get("use_takeout", False):
-                wait_time = 0
-            else:
-                wait_time = None
-            messages = self.client.get_messages(group, offset_id=offset_id,
-                                                limit=self.config["fetch_batch_size"],
-                                                wait_time=wait_time,
-                                                ids=ids,
-                                                reverse=True)
-            return messages
-        except errors.FloodWaitError as e:
-            logging.info(
-                "flood waited: have to wait {} seconds".format(e.seconds))
 
     async def _get_user(self, u, chat) -> User:
         tags = []
@@ -279,7 +282,7 @@ class Sync:
             avatar=avatar
         )
 
-    def _make_poll(self, msg):
+    def _make_poll(self, msg) -> Poll:
         if not msg.media.results or not msg.media.results.results:
             return None
 
@@ -294,69 +297,53 @@ class Sync:
                     total * 100 if total > 0 else 0
                 options[i]["correct"] = r.correct
         logging.info("poll options: {}".format(options))
-        return Media(
-            id=msg.id,
-            type="poll",
-            url=None,
+        return Poll(
+            chat_id=msg.chat_id,
+            message_id=msg.id,
             title=msg.media.poll.question.text,
-            description=json.dumps(options),
-            thumb=None
+            description=json.dumps(options)
         )
 
-    async def _get_media(self, msg):
-        if isinstance(msg.media, telethon.tl.types.MessageMediaWebPage) and \
-                not isinstance(msg.media.webpage, telethon.tl.types.WebPageEmpty):
-            return Media(
-                id=msg.id,
-                type="webpage",
-                url=msg.media.webpage.url,
-                title=msg.media.webpage.title,
-                description=msg.media.webpage.description if msg.media.webpage.description else None,
-                thumb=None
-            )
-        elif isinstance(msg.media, telethon.tl.types.MessageMediaPhoto) or \
-                isinstance(msg.media, telethon.tl.types.MessageMediaDocument) or \
-                isinstance(msg.media, telethon.tl.types.MessageMediaContact):
-            if self.config["download_media"]:
-                # Filter by extensions?
-                if len(self.config["media_mime_types"]) > 0:
-                    if hasattr(msg, "file") and hasattr(msg.file, "mime_type") and msg.file.mime_type:
-                        if msg.file.mime_type not in self.config["media_mime_types"]:
-                            logging.info(
-                                "skipping media #{} / {}".format(msg.file.name, msg.file.mime_type))
-                            return
+    async def _get_media(self, msg) -> Media:
+        # Filter by extensions?
+        if len(self.config["media_mime_types"]) > 0:
+            if hasattr(msg, "file") and hasattr(msg.file, "mime_type") and msg.file.mime_type:
+                if msg.file.mime_type not in self.config["media_mime_types"]:
+                    logging.info(
+                        "skipping media #{} / {}".format(msg.file.name, msg.file.mime_type))
+                    return
 
-                try:
-                    media_id = utils.get_media_id(msg)                    
-                    logging.info("checking media id: {}, name: {} in cache".format(media_id, msg.file.name))
-                    if media_id is None:
-                        raise
-                    cache = self.db.get_media(media_id, None)
-                    if cache is not None:
-                        logging.info("found media id: {} in cache".format(media_id))
-                        return cache
-                    logging.info("downloading media id: {} from msg id: {}".format(media_id, msg.id))
-                    basename, fname, thumb = await self._download_media(msg)
-                    return Media(
-                        id=media_id,
-                        type=msg.file.mime_type if hasattr(msg, "file") and hasattr(msg.file, "mime_type") else "photo",
-                        url=fname,
-                        title=basename,
-                        description=None,
-                        thumb=thumb
-                    )
-                except (errors.FloodWaitError, errors.FloodPremiumWaitError) as e:
-                    logging.info(f"Sleeping for {e.seconds + 60} seconds." + e._fmt_request(e.request))
-                    await asyncio.sleep(e.seconds + 60)
-                    # retry download
-                    return await self._get_media(msg)
-                except (errors.FilerefUpgradeNeededError, errors.FileReferenceExpiredError) as e:
-                    msg = self.client.get_messages(await msg.get_input_chat(), ids=msg.id)
-                    return await self._get_media(msg)
-                except Exception as e:
-                    logging.error(
-                        "error downloading media: #{}: {}".format(msg.id, e))
-                    traceback.print_exc()
+        try:
+            media_id = utils.get_media_id(msg)                    
+            logging.info("checking media id: {}, name: {} in cache".format(media_id, msg.file.name))
+            if media_id is None:
+                raise
+            cache = self.db.get_media(media_id, None)
+            if cache is not None:
+                logging.info("found media id: {} in cache".format(media_id))
+                return cache
+            logging.info("downloading media id: {} from msg id: {}".format(media_id, msg.id))
+            basename, fname, thumb = await self._download_media(msg)
+            return Media(
+                id=media_id,
+                type=msg.file.mime_type if hasattr(msg, "file") and hasattr(msg.file, "mime_type") else "photo",
+                url=fname,
+                title=basename,
+                description=None,
+                thumb=thumb
+            )
+        except (errors.FloodWaitError, errors.FloodPremiumWaitError) as e:
+            logging.info(f"Sleeping for {e.seconds + 60} seconds." + e._fmt_request(e.request))
+            await asyncio.sleep(e.seconds + 60)
+            # retry download
+            return await self._get_media(msg)
+        except (errors.FilerefUpgradeNeededError, errors.FileReferenceExpiredError) as e:
+            msg = self.client.get_messages(await msg.get_input_chat(), ids=msg.id)
+            return await self._get_media(msg)
+        except Exception as e:
+            logging.error(
+                "error downloading media: #{}: {}".format(msg.id, e))
+            traceback.print_exc()
 
     async def _download_with_progress(self, msg, rename_prefix="", **kwargs):
         def progress_callback(current, total):

@@ -31,5 +31,5 @@ class GroupWorker:
                     last_id, last_date))
             
             async for msg in self.client.iter_messages(group_entity, reverse=True, offset_id=last_id if last_id is not None else 0, ids=ids):
-                await self.output_queue.put((group_id, msg))
+                await self.output_queue.put(msg)
                 

@@ -49,14 +49,39 @@ CREATE table IF NOT EXISTS media (
 );
 """
 
+create_poll_schema = """
+CREATE table IF NOT EXISTS poll (
+    chat_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    title TEXT,
+    description TEXT
+    PRIMARY KEY (chat_id, message_id)
+);
+"""
+
+create_webpage_schema = """
+CREATE table IF NOT EXISTS webpage (
+    chat_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    url TEXT,
+    title TEXT,
+    description TEXT
+    PRIMARY KEY (chat_id, message_id)
+);
+"""
+
 User = namedtuple(
     "User", ["id", "username", "first_name", "last_name", "tags", "avatar"])
 
 Message = namedtuple(
-    "Message", ["id", "type", "date", "edit_date", "content", "reply_to", "user", "media"])
+    "Message", ["id", "type", "date", "edit_date", "content", "reply_to", "user", "media_id"])
 
 Media = namedtuple(
     "Media", ["id", "type", "url", "title", "description", "thumb"])
+
+Poll = namedtuple("Poll", ["chat_id", "message_id", "title", "description"])
+
+WebPage = namedtuple("WebPage", ["chat_id", "message_id", "url", "title", "description"])
 
 Month = namedtuple("Month", ["date", "slug", "label", "count"])
 
@@ -86,13 +111,15 @@ class DB:
             self.tz = pytz.timezone(tz)
 
         with self.conn:
+            self.conn.execute(create_webpage_schema)
+            self.conn.execute(create_poll_schema)
             self.conn.execute(create_media_schema)
             self.conn.execute(create_user_schema)
             self.conn.execute(create_chat_collection_schema)
 
     def _parse_date(self, d) -> str:
         return datetime.strptime(d, "%Y-%m-%dT%H:%M:%S%z")
-    
+
     def create_chat_table(self, chat_id: int, title: str):
         with self.conn:
             self.conn.execute(create_chat_schema.format(chat_id))
@@ -182,26 +209,8 @@ class DB:
         for r in cur.fetchall():
             yield self._make_message(r)
 
-    def get_media(self, media_id: int, old_media_id: str = None):
+    def get_media(self, media_id: int):
         res = None
-        if old_media_id is not None:
-            try:
-                cur = self.conn.execute("""
-                    SELECT id, type, url, title, description, thumb
-                    FROM old_media
-                    WHERE id = ?
-                    """, (old_media_id,))
-                res = cur.fetchone()
-                if res is not None:
-                    _, media_type, media_url, media_title, desc, media_thumb = res
-                    return Media(id=media_id,
-                                type=media_type,
-                                url=media_url,
-                                title=media_title,
-                                description=desc,
-                                thumb=media_thumb)
-            except:
-                pass
         cur = self.conn.execute("""
                 SELECT id, type, url, title, description, thumb
                 FROM media
@@ -231,12 +240,12 @@ class DB:
 
     def insert_user(self, u: User):
         """Insert a user and if they exist, update the fields."""
-        cur = self.conn.cursor()
-        cur.execute("""INSERT INTO users (id, username, first_name, last_name, tags, avatar)
-            VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT (id)
-            DO UPDATE SET username=excluded.username, first_name=excluded.first_name,
-                last_name=excluded.last_name, tags=excluded.tags, avatar=excluded.avatar
-            """, (u.id, u.username, u.first_name, u.last_name, " ".join(u.tags), u.avatar))
+        with self.conn:
+            self.conn.execute("""INSERT INTO users (id, username, first_name, last_name, tags, avatar)
+                VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT (id)
+                DO UPDATE SET username=excluded.username, first_name=excluded.first_name,
+                    last_name=excluded.last_name, tags=excluded.tags, avatar=excluded.avatar
+                """, (u.id, u.username, u.first_name, u.last_name, " ".join(u.tags), u.avatar))
 
     def insert_media(self, m: Media):
         with self.conn:
@@ -249,6 +258,29 @@ class DB:
                         m.title,
                         m.description,
                         m.thumb)
+                        )
+
+    def insert_poll(self, p: Poll):
+        with self.conn:
+            self.conn.execute("""INSERT OR REPLACE INTO poll
+                (chat_id, message_id, title, description)
+                VALUES(?, ?, ?, ?)""",
+                        (p.chat_id,
+                        p.message_id,
+                        p.title,
+                        p.description)
+                        )
+    
+    def insert_webpage(self, w: WebPage):
+        with self.conn:
+            self.conn.execute("""INSERT OR REPLACE INTO webpage
+                (chat_id, message_id, url, title, description)
+                VALUES(?, ?, ?, ?, ?)""",
+                        (w.chat_id,
+                        w.message_id,
+                        w.url,
+                        w.title,
+                        w.description)
                         )
 
     def insert_message(self, chat_id: int, m: Message):
@@ -265,7 +297,7 @@ class DB:
                         m.content,
                         m.reply_to,
                         m.user.id,
-                        m.media.id if m.media else None)
+                        m.media_id)
                         )
 
     def commit(self):

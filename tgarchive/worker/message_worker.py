@@ -6,12 +6,13 @@ from io import BytesIO
 from PIL import Image
 import telethon
 from telethon import TelegramClient, errors
+import telethon.tl.custom
+import telethon.tl.types
 from tgarchive import db, utils
 
 class MessageWorker:
-    def __init__(self, downloader_queue: asyncio.Queue, saver_queue, input_queue: asyncio.Queue, client: TelegramClient, database: db.DB, config: dict):
+    def __init__(self, downloader_queue: asyncio.Queue, input_queue: asyncio.Queue, client: TelegramClient, database: db.DB, config: dict):
         self.downloader_queue = downloader_queue
-        self.saver_queue = saver_queue
         self.input_queue = input_queue
         self.client = client
         self.db = database
@@ -19,28 +20,21 @@ class MessageWorker:
     
     async def run(self):
         while True:
-            (chat_id, msg) = await self.input_queue.get()
+            msg: telethon.tl.custom.Message = await self.input_queue.get()
             if msg is None:
                 break
+            chat_id = msg.chat_id
             message = await self._get_message(msg)
-                
-            if message is None:
-                continue
 
             # Insert the records into DB.
             self.db.insert_user(message.user)
-
-            if message.media:
-                self.db.insert_media(message.media)
-
             self.db.insert_message(chat_id, message)
 
             self.db.commit()
 
-    async def _get_message(self, msg) -> db.Message:
+    async def _get_message(self, msg: telethon.tl.custom.Message) -> db.Message:
         # https://docs.telethon.dev/en/latest/quick-references/objects-reference.html#message
-        if msg is None:
-            return None
+
         # Message.
         typ = "message"
         if msg.action:
@@ -50,19 +44,10 @@ class MessageWorker:
                 typ = "user_joined_by_link"
             elif isinstance(msg.action, telethon.tl.types.MessageActionChatDeleteUser):
                 typ = "user_left"
-        result = db.Message(
-            type=typ,
-            id=msg.id,
-            date=msg.date,
-            edit_date=msg.edit_date,
-            content=sticker if sticker else msg.raw_text,
-            reply_to=msg.reply_to_msg_id if msg.reply_to and msg.reply_to.reply_to_msg_id else None,
-            user=await self._get_user(await msg.get_sender(), await msg.get_chat()),
-            media=None
-        )
+
         # Media.
         sticker = None
-        med = None
+        media_id = None
         if msg.media:
             # If it's a sticker, get the alt value (unicode emoji).
             if isinstance(msg.media, telethon.tl.types.MessageMediaDocument) and \
@@ -73,37 +58,50 @@ class MessageWorker:
                 if len(alt) > 0:
                     sticker = alt[0]
             elif isinstance(msg.media, telethon.tl.types.MessageMediaPoll):
-                med = self._make_poll(msg)
-            else:
-                med = await self._get_media(msg)
-        result.media = med
-        return result
-
-    async def _get_media(self, msg):
-        if isinstance(msg.media, telethon.tl.types.MessageMediaWebPage) and \
+                poll = self._make_poll(msg)
+                self.db.insert_poll(poll)
+                media_id = 0
+            elif isinstance(msg.media, telethon.tl.types.MessageMediaWebPage) and \
                 not isinstance(msg.media.webpage, telethon.tl.types.WebPageEmpty):
-            return db.Media(
-                id=msg.id,
-                type="webpage",
-                url=msg.media.webpage.url,
-                title=msg.media.webpage.title,
-                description=msg.media.webpage.description if msg.media.webpage.description else None,
-                thumb=None
-            )
-        elif isinstance(msg.media, telethon.tl.types.MessageMediaPhoto) or \
-                isinstance(msg.media, telethon.tl.types.MessageMediaDocument) or \
-                isinstance(msg.media, telethon.tl.types.MessageMediaContact):
-            if self.config["download_media"]:
-                # Filter by extensions?
-                if len(self.config["media_mime_types"]) > 0:
-                    if hasattr(msg, "file") and hasattr(msg.file, "mime_type") and msg.file.mime_type:
-                        if msg.file.mime_type not in self.config["media_mime_types"]:
-                            logging.info(
-                                "skipping media #{} / {}".format(msg.file.name, msg.file.mime_type))
-                            return
+                webpage = db.WebPage(
+                    chat_id=msg.chat_id,
+                    message_id=msg.id,
+                    url=msg.media.webpage.url,
+                    title=msg.media.webpage.title,
+                    description=msg.media.webpage.description if msg.media.webpage.description else None
+                )
+                media_id = 1
+                self.db.insert_webpage(webpage)
+            if self.config["download_media"] and \
+                isinstance(msg.media, (telethon.tl.types.MessageMediaPhoto,
+                                       telethon.tl.types.MessageMediaDocument,
+                                       telethon.tl.types.MessageMediaContact)):
+                media_id = await self._get_media(msg)
+            else:
+                logging.info("unknown media type: {}".format(msg.media))
 
-                self.downloader_queue.put_nowait(())
-                
+        return db.Message(
+            type=typ,
+            id=msg.id,
+            date=msg.date,
+            edit_date=msg.edit_date,
+            content=sticker if sticker else msg.raw_text,
+            reply_to=msg.reply_to_msg_id if msg.reply_to and msg.reply_to.reply_to_msg_id else None,
+            user=await self._get_user(await msg.get_sender(), await msg.get_chat()),
+            media_id=media_id
+        )
+
+    async def _get_media(self, msg: telethon.tl.custom.Message):
+        # Filter by extensions?
+        if len(self.config["media_mime_types"]) > 0:
+            if hasattr(msg, "file") and hasattr(msg.file, "mime_type") and msg.file.mime_type:
+                if msg.file.mime_type not in self.config["media_mime_types"]:
+                    logging.info(
+                        "skipping media #{} / {}".format(msg.file.name, msg.file.mime_type))
+                    return None
+
+        await self.downloader_queue.put(msg)
+        return utils.get_media_id(msg)
 
     async def _download_avatar(self, user):
         fname = "avatar_{}.jpg".format(user.id)
@@ -192,11 +190,11 @@ class MessageWorker:
             avatar=avatar
         )
 
-    def _make_poll(self, msg):
+    def _make_poll(self, msg: telethon.tl.custom.Message) -> db.Poll:
         if not msg.media.results or not msg.media.results.results:
             return None
 
-        options = [{"label": a.text, "count": 0, "correct": False}
+        options = [{"label": a.text.text, "count": 0, "correct": False}
                    for a in msg.media.poll.answers]
 
         total = msg.media.results.total_voters
@@ -207,11 +205,9 @@ class MessageWorker:
                     total * 100 if total > 0 else 0
                 options[i]["correct"] = r.correct
 
-        return db.Media(
-            id=msg.id,
-            type="poll",
-            url=None,
-            title=msg.media.poll.question,
-            description=json.dumps(options),
-            thumb=None
+        return db.Poll(
+            chat_id=msg.chat_id,
+            message_id=msg.id,
+            title=msg.media.poll.question.text,
+            description=json.dumps(options)
         )
