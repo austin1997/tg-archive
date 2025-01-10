@@ -31,7 +31,7 @@ class MediaWorker:
                 self.db.insert_media(media)
                 self.db.remove_pending_message(msg.chat_id, msg.id)
                 self.db.commit()
-        except asyncio.CancelledError:
+        finally:
             await self.downloader._cleanup()
             logging.info("MediaWorker cancelled.")
 
