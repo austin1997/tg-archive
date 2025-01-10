@@ -96,6 +96,7 @@ class Sync:
         Sync syncs messages from Telegram from the last synced message
         into the local SQLite DB.
         """
+        self.db.print_tabels()
         _ = await self.client.get_dialogs()
         chat_queue = asyncio.Queue()
         msg_queue = asyncio.Queue(16)
