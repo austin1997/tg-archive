@@ -62,7 +62,7 @@ CREATE table IF NOT EXISTS poll (
     chat_id INTEGER NOT NULL,
     message_id INTEGER NOT NULL,
     title TEXT,
-    description TEXT
+    description TEXT,
     PRIMARY KEY (chat_id, message_id)
 );
 """
@@ -73,7 +73,7 @@ CREATE table IF NOT EXISTS webpage (
     message_id INTEGER NOT NULL,
     url TEXT,
     title TEXT,
-    description TEXT
+    description TEXT,
     PRIMARY KEY (chat_id, message_id)
 );
 """
