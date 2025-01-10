@@ -111,18 +111,22 @@ class Sync:
         
         group_workers = [worker.GroupWorker(msg_queue, chat_queue, self.client, self.db) for _ in range(len(self.config["groups"]))]
         msg_workers = [worker.MessageWorker(media_queue, msg_queue, self.client, self.db, self.config) for _ in range(8)]
-        media_workers = [worker.MediaWorker(media_queue, self.client, self.db, self.media_dir, self.media_tmp_dir) for _ in range(1)]
+        media_workers = [worker.MediaWorker(media_queue, self.client, self.db, self.media_dir, self.media_tmp_dir) for _ in range(2)]
         tasks = []
-        for w in group_workers:
-            tasks.append(asyncio.create_task(w.run()))
-        for w in msg_workers:
-            tasks.append(asyncio.create_task(w.run()))
-        for w in media_workers:
-            tasks.append(asyncio.create_task(w.run()))
-        await asyncio.gather(*tasks, return_exceptions=True)
-        await msg_queue.join()
-        await media_queue.join()
-        await chat_queue.join()
+        try:
+            for w in group_workers:
+                tasks.append(asyncio.create_task(w.run()))
+            for w in msg_workers:
+                tasks.append(asyncio.create_task(w.run()))
+            for w in media_workers:
+                tasks.append(asyncio.create_task(w.run()))
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await msg_queue.join()
+            await media_queue.join()
+            await chat_queue.join()
+        finally:
+            for task in tasks:
+                task.cancel()
 
     def new_client(self, session, config):
         if "proxy" in config and config["proxy"].get("enable"):

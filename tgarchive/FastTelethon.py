@@ -231,14 +231,13 @@ class ParallelTransferrer:
         self.senders, created_time = self.sender_pool.get(dc_id, (None, None))
         if self.senders is not None:
             time_diff = curr_time - created_time
-            if time_diff.total_seconds() < 1800:
+            if time_diff.total_seconds() < MAX_CONNECTION_LIFETIME:
                 for sender in self.senders:
                     sender.reset_file(file, part_size)
                 return created_time
-            else:
-                logging.info("Clearing long-lasting connections and reconnect")
-                for sender in self.senders:
-                    await sender.disconnect()
+            logging.info("Clearing long-lasting connections and reconnect")
+            for sender in self.senders:
+                await sender.disconnect()
         
         self.auth_key = None
         if self.client.session.dc_id == dc_id:
