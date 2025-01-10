@@ -112,20 +112,32 @@ class Sync:
         group_workers = [worker.GroupWorker(msg_queue, chat_queue, self.client, self.db) for _ in range(len(self.config["groups"]))]
         msg_workers = [worker.MessageWorker(media_queue, msg_queue, self.client, self.db, self.config) for _ in range(8)]
         media_workers = [worker.MediaWorker(media_queue, self.client, self.db, self.media_dir, self.media_tmp_dir) for _ in range(1)]
-        tasks = []
+        group_tasks = []
+        msg_tasks = []
+        media_tasks = []
         try:
             for w in group_workers:
-                tasks.append(asyncio.create_task(w.run()))
+                group_tasks.append(asyncio.create_task(w.run()))
             for w in msg_workers:
-                tasks.append(asyncio.create_task(w.run()))
+                msg_tasks.append(asyncio.create_task(w.run()))
             for w in media_workers:
-                tasks.append(asyncio.create_task(w.run()))
+                media_tasks.append(asyncio.create_task(w.run()))
         except Exception as e:
-            for task in tasks:
+            for task in group_tasks:
+                task.cancel()
+            for task in msg_tasks:
+                task.cancel()
+            for task in media_tasks:
                 task.cancel()
             raise e
         finally:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*group_tasks, return_exceptions=True)
+            for _ in enumerate(msg_tasks):
+                await msg_queue.put(None)
+            await asyncio.gather(*msg_tasks, return_exceptions=True)
+            for _ in enumerate(media_tasks):
+                await media_queue.put(None)
+            await asyncio.gather(*media_tasks, return_exceptions=True)
             await msg_queue.join()
             await media_queue.join()
             await chat_queue.join()

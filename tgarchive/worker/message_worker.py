@@ -62,15 +62,23 @@ class MessageWorker:
                 poll = self._make_poll(msg)
                 self.db.insert_poll(poll)
                 media_id = 0
-            elif isinstance(msg.media, telethon.tl.types.MessageMediaWebPage) and \
-                not isinstance(msg.media.webpage, telethon.tl.types.WebPageEmpty):
-                webpage = db.WebPage(
-                    chat_id=msg.chat_id,
-                    message_id=msg.id,
-                    url=msg.media.webpage.url,
-                    title=msg.media.webpage.title,
-                    description=msg.media.webpage.description if msg.media.webpage.description else None
-                )
+            elif isinstance(msg.media, telethon.tl.types.MessageMediaWebPage):
+                if isinstance(msg.media.webpage, telethon.tl.types.WebPageEmpty):
+                    webpage = db.WebPage(
+                        chat_id=msg.chat_id,
+                        message_id=msg.id,
+                        url=msg.media.webpage.url,
+                        title=None,
+                        description=None
+                    )
+                else:
+                    webpage = db.WebPage(
+                        chat_id=msg.chat_id,
+                        message_id=msg.id,
+                        url=msg.media.webpage.url,
+                        title=msg.media.webpage.title,
+                        description=msg.media.webpage.description if msg.media.webpage.description else None
+                    )
                 media_id = 1
                 self.db.insert_webpage(webpage)
             elif self.config["download_media"] and \
