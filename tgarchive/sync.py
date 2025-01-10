@@ -108,10 +108,11 @@ class Sync:
         for chat_id, message_id in pending_msgs:
             logging.info("Pushing pending message id={} from chat_id={} to queue".format(message_id, chat_id))
             msg_queue.put_nowait(await self.client.get_messages(await self.client.get_entity(chat_id), ids=message_id))
-        
+
+        auth_key_cache = {}
         group_workers = [worker.GroupWorker(msg_queue, chat_queue, self.client, self.db) for _ in range(len(self.config["groups"]))]
         msg_workers = [worker.MessageWorker(media_queue, msg_queue, self.client, self.db, self.config) for _ in range(8)]
-        media_workers = [worker.MediaWorker(media_queue, self.client, self.db, self.media_dir, self.media_tmp_dir) for _ in range(1)]
+        media_workers = [worker.MediaWorker(media_queue, self.client, auth_key_cache, self.db, self.media_dir, self.media_tmp_dir) for _ in range(1)]
         group_tasks = []
         msg_tasks = []
         media_tasks = []

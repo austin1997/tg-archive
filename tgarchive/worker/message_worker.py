@@ -22,7 +22,6 @@ class MessageWorker:
         while True:
             msg: telethon.tl.custom.Message = await self.input_queue.get()
             if msg is None:
-                await self.downloader_queue.put(None)
                 break
             chat_id = (await msg.get_chat()).id
             message = await self._get_message(msg)

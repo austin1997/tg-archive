@@ -13,13 +13,13 @@ from tgarchive import db, utils, FastTelethon
 import traceback
 
 class MediaWorker:
-    def __init__(self, input_queue: asyncio.Queue, client: TelegramClient, database: db.DB, media_dir: str, media_tmp_dir: str):
+    def __init__(self, input_queue: asyncio.Queue, client: TelegramClient, auth_key_cache: dict, database: db.DB, media_dir: str, media_tmp_dir: str):
         self.input_queue = input_queue
         self.client = client
         self.db = database
         self.media_dir = media_dir
         self.media_tmp_dir = media_tmp_dir
-        self.downloader = FastTelethon.ParallelTransferrer(self.client)
+        self.downloader = FastTelethon.ParallelTransferrer(self.client, auth_key_cache)
     
     async def run(self):
         try:

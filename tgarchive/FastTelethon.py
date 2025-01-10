@@ -195,17 +195,19 @@ class ParallelTransferrer:
     loop: asyncio.AbstractEventLoop
     dc_id: int
     senders: Optional[List[Union[DownloadSender, UploadSender]]]
-    auth_key: AuthKey
+    # auth_key: AuthKey
     upload_ticker: int
     sender_pool: dict[int, Tuple[List[Union[DownloadSender, UploadSender]], datetime]]
 
-    def __init__(self, client: TelegramClient) -> None:
+    def __init__(self, client: TelegramClient, auth_key_cache: dict) -> None:
         self.client = client
         self.loop = self.client.loop
-        self.auth_key = None
         self.senders = None
         self.upload_ticker = 0
         self.sender_pool = {}
+        self.auth_key_cache = auth_key_cache
+        if self.client.session.dc_id not in self.auth_key_cache:
+            self.auth_key_cache[self.client.session.dc_id] = self.client.session.auth_key
 
     async def _cleanup(self) -> None:
         await asyncio.gather(*[sender.disconnect() for sender in self.senders])
@@ -238,10 +240,7 @@ class ParallelTransferrer:
             logging.info("Clearing long-lasting connections and reconnect")
             for sender in self.senders:
                 await sender.disconnect()
-        
-        self.auth_key = None
-        if self.client.session.dc_id == dc_id:
-            self.auth_key = self.client.session.auth_key
+
         # The first cross-DC sender will export+import the authorization, so we always create it
         # before creating any other senders.
         self.senders = [
@@ -277,7 +276,6 @@ class ParallelTransferrer:
     async def _init_upload(
         self, connections: int, file_id: int, part_count: int, big: bool
     ) -> None:
-        self.auth_key = self.client.session.auth_key
         self.senders = [
             await self._create_upload_sender(file_id, part_count, big, 0, connections),
             *await asyncio.gather(
@@ -304,7 +302,8 @@ class ParallelTransferrer:
 
     async def _create_sender(self, dc_id: int) -> MTProtoSender:
         dc = await self.client._get_dc(dc_id)
-        sender = MTProtoSender(self.auth_key, loggers=self.client._log)
+        auth_key = self.auth_key_cache.get(dc_id, None)
+        sender = MTProtoSender(auth_key, loggers=self.client._log)
         await sender.connect(
             self.client._connection(
                 dc.ip_address,
@@ -314,7 +313,7 @@ class ParallelTransferrer:
                 proxy=self.client._proxy,
             )
         )
-        if not self.auth_key:
+        if not auth_key:
             auth = await self.client(ExportAuthorizationRequest(dc_id))
             self.client._init_request.query = ImportAuthorizationRequest(
                 id=auth.id, bytes=auth.bytes
@@ -323,7 +322,7 @@ class ParallelTransferrer:
             # if self.client.session.takeout_id is not None:
             #     req = InvokeWithTakeoutRequest(self.client.session.takeout_id, req)
             await sender.send(req)
-            self.auth_key = sender.auth_key
+            self.auth_key_cache[dc_id] = sender.auth_key
         return sender
 
     async def init_upload(
