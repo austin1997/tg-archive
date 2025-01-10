@@ -412,6 +412,7 @@ class ParallelTransferrer:
         # for file_hash in file_hashes:
         #     file_hashes_dict[file_hash.offset] = file_hash
 
+        tasks = []
         try:
             queue = asyncio.Queue()
             for i in range(0, file_size, part_size):
