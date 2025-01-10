@@ -27,7 +27,7 @@ class MediaWorker:
                 msg: telethon.tl.custom.Message = await self.input_queue.get()
                 if msg is None:
                     break
-                media = self._handle_message(msg)
+                media = await self._handle_message(msg)
                 self.db.insert_media(media)
                 self.db.remove_pending_message(msg.chat_id, msg.id)
                 self.db.commit()
