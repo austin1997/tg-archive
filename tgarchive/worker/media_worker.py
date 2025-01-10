@@ -13,13 +13,14 @@ from tgarchive import db, utils, FastTelethon
 import traceback
 
 class MediaWorker:
-    def __init__(self, input_queue: asyncio.Queue, client: TelegramClient, auth_key_cache: dict, database: db.DB, media_dir: str, media_tmp_dir: str):
+    def __init__(self, input_queue: asyncio.Queue, client: TelegramClient, auth_key_cache: dict, media_downloading: set, database: db.DB, media_dir: str, media_tmp_dir: str):
         self.input_queue = input_queue
         self.client = client
         self.db = database
         self.media_dir = media_dir
         self.media_tmp_dir = media_tmp_dir
         self.downloader = FastTelethon.ParallelTransferrer(self.client, auth_key_cache)
+        self.media_downloading = media_downloading
     
     async def run(self):
         try:
@@ -27,17 +28,21 @@ class MediaWorker:
                 msg: telethon.tl.custom.Message = await self.input_queue.get()
                 if msg is None:
                     break
-                media = await self._handle_message(msg)
+                media_id = utils.get_media_id(msg)
+                if media_id in self.media_downloading:
+                    logging.info("media id: {} is already downloading".format(media_id))
+                self.media_downloading.add(media_id)
+                media = await self._handle_message(msg, media_id)
                 self.db.insert_media(media)
                 self.db.remove_pending_message(msg.chat_id, msg.id)
                 self.db.commit()
+                self.media_downloading.remove(media_id)
         finally:
             await self.downloader._cleanup()
             logging.info("MediaWorker cancelled.")
 
-    async def _handle_message(self, msg: telethon.tl.custom.Message) -> db.Media:
+    async def _handle_message(self, msg: telethon.tl.custom.Message, media_id: int) -> db.Media:
         try:
-            media_id = utils.get_media_id(msg)                    
             logging.info("checking media id: {}, name: {} in cache".format(media_id, msg.file.name))
             if media_id is None:
                 raise
@@ -59,10 +64,10 @@ class MediaWorker:
                     logging.info(f"Sleeping for {e.seconds + 60} seconds." + e._fmt_request(e.request))
                     await asyncio.sleep(e.seconds + 60)
                     # retry download
-                    return await self._handle_message(msg)
+                    return await self._handle_message(msg, utils.get_media_id(msg))
         except (errors.FilerefUpgradeNeededError, errors.FileReferenceExpiredError) as e:
             msg = self.client.get_messages(await msg.get_input_chat(), ids=msg.id)
-            return await self._handle_message(msg)
+            return await self._handle_message(msg, utils.get_media_id(msg))
         except Exception as e:
             logging.error(
                 "error downloading media: #{}: {}".format(msg.id, e))
