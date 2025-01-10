@@ -23,7 +23,7 @@ class MessageWorker:
             msg: telethon.tl.custom.Message = await self.input_queue.get()
             if msg is None:
                 break
-            chat_id = msg.chat_id
+            chat_id = await msg.get_chat().id
             message = await self._get_message(msg)
 
             # Insert the records into DB.

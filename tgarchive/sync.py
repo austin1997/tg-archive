@@ -105,11 +105,12 @@ class Sync:
         
         pending_msgs = self.db.get_pending_messages()
         for chat_id, message_id in pending_msgs:
+            logging.info("Pushing pending message id={} from chat_id={} to queue".format(message_id, chat_id))
             msg_queue.put_nowait(self.client.get_messages(self.client.get_entity(chat_id), ids=message_id))
         
-        group_workers = [worker.GroupWorker(msg_queue, chat_queue, self.client, self.db)] * len(self.config["groups"])
-        msg_workers = [worker.MessageWorker(media_queue, msg_queue, self.client, self.db, self.config)] * 8
-        media_workers = [worker.MediaWorker(media_queue, self.client, self.db, self.media_dir, self.media_tmp_dir)] * 2
+        group_workers = [worker.GroupWorker(msg_queue, chat_queue, self.client, self.db) for _ in range(len(self.config["groups"]))]
+        msg_workers = [worker.MessageWorker(media_queue, msg_queue, self.client, self.db, self.config) for _ in range(8)]
+        media_workers = [worker.MediaWorker(media_queue, self.client, self.db, self.media_dir, self.media_tmp_dir) for _ in range(2)]
         tasks = []
         for w in group_workers:
             tasks.append(asyncio.create_task(w.run()))

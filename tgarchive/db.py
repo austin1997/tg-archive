@@ -126,6 +126,11 @@ class DB:
             self.conn.execute(create_user_schema)
             self.conn.execute(create_chat_collection_schema)
 
+    def print_tabels(self):
+        cur = self.conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        print(cur.fetchall())
+
     def _parse_date(self, d) -> str:
         return datetime.strptime(d, "%Y-%m-%dT%H:%M:%S%z")
 
