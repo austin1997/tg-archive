@@ -41,7 +41,7 @@ class MediaWorker:
             logging.info("checking media id: {}, name: {} in cache".format(media_id, msg.file.name))
             if media_id is None:
                 raise
-            cache = self.db.get_media(media_id, None)
+            cache = self.db.get_media(media_id)
             if cache is not None:
                 logging.info("found media id: {} in cache".format(media_id))
                 return cache
