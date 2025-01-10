@@ -14,6 +14,14 @@ CREATE table IF NOT EXISTS chat (
 );
 """
 
+create_pending_msg_schema = """
+CREATE table IF NOT EXISTS pending_msg (
+    chat_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    PRIMARY KEY (chat_id, message_id)
+);
+"""
+
 create_chat_schema = """
 CREATE table IF NOT EXISTS "{}" (
     id INTEGER NOT NULL PRIMARY KEY,
@@ -111,6 +119,7 @@ class DB:
             self.tz = pytz.timezone(tz)
 
         with self.conn:
+            self.conn.execute(create_pending_msg_schema)
             self.conn.execute(create_webpage_schema)
             self.conn.execute(create_poll_schema)
             self.conn.execute(create_media_schema)
@@ -299,6 +308,24 @@ class DB:
                         m.user.id,
                         m.media_id)
                         )
+    
+    def insert_pending_message(self, chat_id: int, message_id: int):
+        with self.conn:
+            self.conn.execute("""INSERT OR REPLACE INTO pending_msg
+                (chat_id, message_id)
+                VALUES(?, ?)""", (chat_id, message_id))
+    
+    def remove_pending_message(self, chat_id: int, message_id: int):
+        with self.conn:
+            self.conn.execute("""DELETE FROM pending_msg
+                WHERE chat_id = ? AND message_id = ?""", (chat_id, message_id))
+    
+    def get_pending_messages(self):
+        cur = self.conn.cursor()
+        cur.execute("""
+            SELECT chat_id, message_id FROM pending_msg
+        """)
+        return cur.fetchall()
 
     def commit(self):
         """Commit pending writes to the DB."""

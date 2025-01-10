@@ -77,6 +77,7 @@ class MessageWorker:
                                        telethon.tl.types.MessageMediaDocument,
                                        telethon.tl.types.MessageMediaContact)):
                 media_id = await self._get_media(msg)
+                self.db.insert_pending_message(msg.chat_id, msg.id)
                 await self.downloader_queue.put(msg)
             else:
                 logging.info("unknown media type: {}".format(msg.media))

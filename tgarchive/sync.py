@@ -98,13 +98,29 @@ class Sync:
         """
         _ = await self.client.get_dialogs()
         chat_queue = asyncio.Queue()
-        msg_queue = asyncio.Queue()
+        msg_queue = asyncio.Queue(16)
+        media_queue = asyncio.Queue(4)
         for group in self.config["groups"]:
             chat_queue.put_nowait((group, from_id))
         
+        pending_msgs = self.db.get_pending_messages()
+        for chat_id, message_id in pending_msgs:
+            msg_queue.put_nowait(self.client.get_messages(self.client.get_entity(chat_id), ids=message_id))
+        
         group_workers = [worker.GroupWorker(msg_queue, chat_queue, self.client, self.db)] * len(self.config["groups"])
-
-
+        msg_workers = [worker.MessageWorker(media_queue, msg_queue, self.client, self.db, self.config)] * 8
+        media_workers = [worker.MediaWorker(media_queue, self.client, self.db, self.media_dir, self.media_tmp_dir)] * 2
+        tasks = []
+        for w in group_workers:
+            tasks.append(asyncio.create_task(w.run()))
+        for w in msg_workers:
+            tasks.append(asyncio.create_task(w.run()))
+        for w in media_workers:
+            tasks.append(asyncio.create_task(w.run()))
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await msg_queue.join()
+        await media_queue.join()
+        await chat_queue.join()
 
     def new_client(self, session, config):
         if "proxy" in config and config["proxy"].get("enable"):

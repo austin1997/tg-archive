@@ -364,8 +364,6 @@ class ParallelTransferrer:
             return None
 
         if filename is None:
-            filename = msg.file.name
-        if filename is None:
             filename = str(utils.get_media_id(msg)) + telethon_utils.get_extension(msg.media)
 
         if os.path.exists(download_folder):
