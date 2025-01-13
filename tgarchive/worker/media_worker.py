@@ -95,6 +95,7 @@ class MediaWorker:
                         new_path = f"{base}_{i}{extension}"
                         destination_path = new_path
                 # Move the file
+                logging.info(f"moving {tmpfile_path} to {destination_path}")
                 shutil.move(tmpfile_path, destination_path)
                 return basename, os.path.basename(destination_path)
 
