@@ -422,13 +422,13 @@ class ParallelTransferrer:
                 for sender in self.senders:
                     task = asyncio.create_task(sender.run(queue, out_file, connection_created_time, None, process_callback))
                     tasks.append(task)
-                await asyncio.gather(*tasks, return_exceptions=True)
+                await asyncio.gather(*tasks)
             await queue.join()
         finally:
             # Cancel our worker tasks.
             for task in tasks:
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*tasks)
             # await self._cleanup()
 
 
