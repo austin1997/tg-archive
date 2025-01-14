@@ -133,13 +133,13 @@ class Sync:
                 task.cancel()
             raise e
         finally:
-            await asyncio.gather(*group_tasks, return_exceptions=True)
+            await asyncio.gather(*group_tasks)
             for _ in enumerate(msg_tasks):
                 await msg_queue.put(None)
-            await asyncio.gather(*msg_tasks, return_exceptions=True)
+            await asyncio.gather(*msg_tasks)
             for _ in enumerate(media_tasks):
                 await media_queue.put(None)
-            await asyncio.gather(*media_tasks, return_exceptions=True)
+            await asyncio.gather(*media_tasks)
             await msg_queue.join()
             await media_queue.join()
             await chat_queue.join()

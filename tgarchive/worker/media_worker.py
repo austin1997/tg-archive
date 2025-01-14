@@ -29,8 +29,17 @@ class MediaWorker:
                 if msg is None:
                     break
                 media_id = utils.get_media_id(msg)
+                if media_id is None or msg.file is None:
+                    logging.info("media in chat: {} msg: {} disappeared.".format(msg.chat_id, msg.id))
+                    continue
                 if media_id in self.media_downloading:
                     logging.info("media id: {} is already downloading".format(media_id))
+                    continue
+                cache = self.db.get_media(media_id)
+                if cache is not None:
+                    logging.info("found media id: {} in cache".format(media_id))
+                    self.db.remove_pending_message(msg.chat_id, msg.id)
+                    continue
                 self.media_downloading.add(media_id)
                 media = await self._handle_message(msg, media_id)
                 self.db.insert_media(media)
@@ -46,10 +55,6 @@ class MediaWorker:
             logging.info("checking media id: {}, name: {} in cache".format(media_id, msg.file.name))
             if media_id is None:
                 raise
-            cache = self.db.get_media(media_id)
-            if cache is not None:
-                logging.info("found media id: {} in cache".format(media_id))
-                return cache
             logging.info("downloading media id: {} from msg id: {}".format(media_id, msg.id))
             basename, fname, thumb = await self._download_media(msg)
             return db.Media(

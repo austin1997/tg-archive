@@ -210,7 +210,7 @@ class ParallelTransferrer:
             self.auth_key_cache[self.client.session.dc_id] = self.client.session.auth_key
 
     async def _cleanup(self) -> None:
-        await asyncio.gather(*[sender.disconnect() for sender in self.senders])
+        # await asyncio.gather(*[sender.disconnect() for sender in self.senders])
         self.senders = None
         for dc, senders in self.sender_pool.items():
             senders, _ = senders
