@@ -59,7 +59,10 @@ class MessageWorker:
                     sticker = alt[0]
             elif isinstance(msg.media, telethon.tl.types.MessageMediaPoll):
                 poll = self._make_poll(msg)
-                self.db.insert_poll(poll)
+                if poll is not None:
+                    self.db.insert_poll(poll)
+                else:
+                    logging.info(f"poll media in chat_id: {msg.chat_id}, msg_id: {msg.id} disappeared.")
                 media_id = 0
             elif isinstance(msg.media, telethon.tl.types.MessageMediaWebPage):
                 if isinstance(msg.media.webpage, telethon.tl.types.WebPageEmpty):
