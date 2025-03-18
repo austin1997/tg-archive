@@ -1,36 +1,66 @@
-import asyncio
-import logging
-import json
 import os
 from io import BytesIO
 from PIL import Image
+import asyncio
+import logging
 import telethon
-from telethon import TelegramClient, errors
 import telethon.tl.custom
 import telethon.tl.types
+from telethon import TelegramClient
 from tgarchive import db, utils
 
 class MessageWorker:
-    def __init__(self, downloader_queue: asyncio.Queue, input_queue: asyncio.Queue, client: TelegramClient, database: db.DB, config: dict):
-        self.downloader_queue = downloader_queue
+    def __init__(self, output_queue: asyncio.Queue, input_queue: asyncio.Queue, pending_msgs: asyncio.Queue, client: TelegramClient, database: db.DB, config: dict):
+        self.output_queue = output_queue
         self.input_queue = input_queue
+        self.pending_msgs = pending_msgs
         self.client = client
         self.db = database
         self.config = config
-    
+
     async def run(self):
-        while True:
-            msg: telethon.tl.custom.Message = await self.input_queue.get()
-            if msg is None:
-                break
-            chat_id = (await msg.get_chat()).id
-            message = await self._get_message(msg)
+        while not self.pending_msgs.empty():
+            message = await self.pending_msgs.get()
+            logging.info(f"Processing pending message {message.id} from chat {message.chat_id}")
+            await self.handle_message(message)
 
-            # Insert the records into DB.
-            self.db.insert_user(message.user)
-            self.db.insert_message(chat_id, message)
+        while not self.input_queue.empty():
+            ids = None
+            (group, from_id) = await self.input_queue.get()
+            logging.info(f"Handling group {group}")
+            group_entity = await self.client.get_entity(group)
+            group_id = group_entity.id
+            self.db.create_chat_table(group_id, group_entity.title)
 
-            self.db.commit()
+            if ids is not None:
+                last_id, last_date = (ids, None)
+                logging.info("fetching message id={}".format(ids))
+            elif from_id is not None:
+                last_id, last_date = (from_id, None)
+                logging.info("fetching from last message id={}".format(last_id))
+            else:
+                last_id, last_date = self.db.get_last_message_id(group_id)
+                logging.info("fetching from last message id={} ({})".format(
+                    last_id, last_date))
+            
+            n = 0
+            async for msg in self.client.iter_messages(group_entity, reverse=True, offset_id=last_id if last_id is not None else 0, ids=ids):
+                last_date = msg.date
+                n += 1
+                await self.handle_message(msg)
+            logging.info("{} finished. fetched {} messages. last message = {}".format(group_id, n, last_date))
+
+    async def handle_message(self, msg: telethon.tl.custom.Message):
+        if msg is None:
+            return
+        chat_id = (await msg.get_chat()).id
+        message = await self._get_message(msg)
+
+        # Insert the records into DB.
+        self.db.insert_user(message.user)
+        self.db.insert_message(chat_id, message)
+
+        self.db.commit()
 
     async def _get_message(self, msg: telethon.tl.custom.Message) -> db.Message:
         # https://docs.telethon.dev/en/latest/quick-references/objects-reference.html#message
@@ -51,7 +81,9 @@ class MessageWorker:
         if msg.media:
             # If it's a sticker, get the alt value (unicode emoji).
             if isinstance(msg.media, telethon.tl.types.MessageMediaDocument) and \
+                not isinstance(msg.media.document, telethon.tl.types.DocumentEmpty) and \
                     hasattr(msg.media, "document") and \
+                    msg.media.document is not None and \
                     msg.media.document.mime_type == "application/x-tgsticker":
                 alt = [a.alt for a in msg.media.document.attributes if isinstance(
                     a, telethon.tl.types.DocumentAttributeSticker)]
@@ -88,9 +120,11 @@ class MessageWorker:
                                        telethon.tl.types.MessageMediaDocument,
                                        telethon.tl.types.MessageMediaContact)):
                 media_id = await self._get_media(msg)
-                if self.db.get_media(media_id) is None:
+                if media_id is None:
+                    logging.warning("Got None media_id in chat_id:{}, msg_id: {}".format(msg.chat_id, msg.id))
+                if media_id is not None and self.db.get_media(media_id) is None:
                     self.db.insert_pending_message(msg.chat_id, msg.id)
-                    await self.downloader_queue.put(msg)
+                    await self.output_queue.put(msg)
                 else:
                     logging.info("found media id: {} in cache".format(media_id))
             else:
@@ -106,7 +140,7 @@ class MessageWorker:
             user=await self._get_user(await msg.get_sender(), await msg.get_chat()),
             media_id=media_id
         )
-
+    
     async def _get_media(self, msg: telethon.tl.custom.Message):
         # Filter by extensions?
         if len(self.config["media_mime_types"]) > 0:

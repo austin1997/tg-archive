@@ -29,7 +29,6 @@ class Sync:
     local SQLite DB.
     """
     config = {}
-    db = None
 
     def __init__(self, config, session_file, db: DB):
         self.config = config
@@ -111,31 +110,22 @@ class Sync:
 
         auth_key_cache = {}
         media_downloading = set()
-        group_workers = [worker.GroupWorker(msg_queue, chat_queue, self.client, self.db) for _ in range(len(self.config["groups"]))]
-        msg_workers = [worker.MessageWorker(media_queue, msg_queue, self.client, self.db, self.config) for _ in range(8)]
+        msg_workers = [worker.MessageWorker(media_queue, chat_queue, msg_queue, self.client, self.db, self.config) for _ in range(len(self.config["groups"])) ]
         media_workers = [worker.MediaWorker(media_queue, self.client, auth_key_cache, media_downloading, self.db, self.media_dir, self.media_tmp_dir) for _ in range(1)]
-        group_tasks = []
         msg_tasks = []
         media_tasks = []
         try:
-            for w in group_workers:
-                group_tasks.append(asyncio.create_task(w.run()))
             for w in msg_workers:
                 msg_tasks.append(asyncio.create_task(w.run()))
             for w in media_workers:
                 media_tasks.append(asyncio.create_task(w.run()))
         except Exception as e:
-            for task in group_tasks:
-                task.cancel()
             for task in msg_tasks:
                 task.cancel()
             for task in media_tasks:
                 task.cancel()
             raise e
         finally:
-            await asyncio.gather(*group_tasks)
-            for _ in enumerate(msg_tasks):
-                await msg_queue.put(None)
             await asyncio.gather(*msg_tasks)
             for _ in enumerate(media_tasks):
                 await media_queue.put(None)

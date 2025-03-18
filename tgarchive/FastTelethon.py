@@ -26,6 +26,7 @@ from telethon import TelegramClient, helpers, errors
 from telethon import utils as telethon_utils
 from telethon.crypto import AuthKey
 from telethon.network import MTProtoSender
+import telethon.tl.custom
 from telethon.tl import types
 from telethon.tl.alltlobjects import LAYER
 from telethon.tl.functions import InvokeWithLayerRequest, InvokeWithTakeoutRequest
@@ -69,7 +70,7 @@ MAX_CONNECTION_LIFETIME: int = 3600
 class DownloadSender:
     client: TelegramClient
     sender: MTProtoSender
-    request: Union[GetFileRequest, InvokeWithTakeoutRequest]
+    request: GetFileRequest
 
     def __init__(
         self,
@@ -348,7 +349,7 @@ class ParallelTransferrer:
 
     async def download(
         self,
-        msg,
+        msg: telethon.tl.custom.Message,
         download_folder: str,
         filename: str = None,
         thumb: int = None,

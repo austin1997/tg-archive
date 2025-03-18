@@ -101,7 +101,6 @@ def _page(n, multiple):
 
 
 class DB:
-    conn = None
     tz = None
 
     def __init__(self, dbfile, tz=None):
