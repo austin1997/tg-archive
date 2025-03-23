@@ -200,15 +200,14 @@ class ParallelTransferrer:
     upload_ticker: int
     sender_pool: dict[int, Tuple[List[Union[DownloadSender, UploadSender]], datetime]]
 
-    def __init__(self, client: TelegramClient, auth_key_cache: dict) -> None:
+    def __init__(self, client: TelegramClient) -> None:
         self.client = client
         self.loop = self.client.loop
         self.senders = None
         self.upload_ticker = 0
         self.sender_pool = {}
-        self.auth_key_cache = auth_key_cache
-        if self.client.session.dc_id not in self.auth_key_cache:
-            self.auth_key_cache[self.client.session.dc_id] = self.client.session.auth_key
+        self.dc_id = -1
+        self.auth_key = None
 
     async def _cleanup(self) -> None:
         # await asyncio.gather(*[sender.disconnect() for sender in self.senders])
@@ -303,8 +302,7 @@ class ParallelTransferrer:
 
     async def _create_sender(self, dc_id: int) -> MTProtoSender:
         dc = await self.client._get_dc(dc_id)
-        auth_key = self.auth_key_cache.get(dc_id, None)
-        sender = MTProtoSender(auth_key, loggers=self.client._log)
+        sender = MTProtoSender(self.auth_key, loggers=self.client._log)
         await sender.connect(
             self.client._connection(
                 dc.ip_address,
@@ -314,7 +312,7 @@ class ParallelTransferrer:
                 proxy=self.client._proxy,
             )
         )
-        if not auth_key:
+        if not self.auth_key or dc_id != self.dc_id:
             auth = await self.client(ExportAuthorizationRequest(dc_id))
             self.client._init_request.query = ImportAuthorizationRequest(
                 id=auth.id, bytes=auth.bytes
@@ -323,7 +321,8 @@ class ParallelTransferrer:
             # if self.client.session.takeout_id is not None:
             #     req = InvokeWithTakeoutRequest(self.client.session.takeout_id, req)
             await sender.send(req)
-            self.auth_key_cache[dc_id] = sender.auth_key
+            self.auth_key = sender.auth_key
+            self.dc_id = dc_id
         return sender
 
     async def init_upload(

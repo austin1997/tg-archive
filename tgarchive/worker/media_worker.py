@@ -13,14 +13,13 @@ from tgarchive import db, utils, FastTelethon
 import traceback
 
 class MediaWorker:
-    def __init__(self, input_queue: asyncio.Queue, client: TelegramClient, auth_key_cache: dict, media_downloading: set, database: db.DB, media_dir: str, media_tmp_dir: str):
+    def __init__(self, input_queue: asyncio.Queue, client: TelegramClient, database: db.DB, media_dir: str, media_tmp_dir: str):
         self.input_queue = input_queue
         self.client = client
         self.db = database
         self.media_dir = media_dir
         self.media_tmp_dir = media_tmp_dir
-        self.downloader = FastTelethon.ParallelTransferrer(self.client, auth_key_cache)
-        self.media_downloading = media_downloading
+        self.downloader = FastTelethon.ParallelTransferrer(self.client)
     
     async def run(self):
         try:
@@ -40,12 +39,10 @@ class MediaWorker:
                     logging.info("found media id: {} in cache".format(media_id))
                     self.db.remove_pending_message(msg.chat_id, msg.id)
                     continue
-                self.media_downloading.add(media_id)
                 media = await self._handle_message(msg, media_id)
                 self.db.insert_media(media)
                 self.db.remove_pending_message(msg.chat_id, msg.id)
                 self.db.commit()
-                self.media_downloading.remove(media_id)
         finally:
             await self.downloader._cleanup()
             logging.info("MediaWorker cancelled.")
@@ -56,6 +53,7 @@ class MediaWorker:
             if media_id is None:
                 raise
             logging.info("downloading media id: {} from msg id: {}".format(media_id, msg.id))
+            # self.client.download_media(msg, file=self.media_tmp_dir)
             basename, fname, thumb = await self._download_media(msg)
             return db.Media(
                 id=media_id,

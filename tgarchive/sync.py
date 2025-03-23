@@ -108,17 +108,14 @@ class Sync:
             logging.info("Pushing pending message id={} from chat_id={} to queue".format(message_id, chat_id))
             msg_queue.put_nowait(await self.client.get_messages(await self.client.get_entity(chat_id), ids=message_id))
 
-        auth_key_cache = {}
-        media_downloading = set()
         msg_workers = [worker.MessageWorker(media_queue, chat_queue, msg_queue, self.client, self.db, self.config) for _ in range(len(self.config["groups"])) ]
-        media_workers = [worker.MediaWorker(media_queue, self.client, auth_key_cache, media_downloading, self.db, self.media_dir, self.media_tmp_dir) for _ in range(1)]
+        media_worker = worker.MediaWorker(media_queue, self.client, self.db, self.media_dir, self.media_tmp_dir)
         msg_tasks = []
         media_tasks = []
         try:
             for w in msg_workers:
                 msg_tasks.append(asyncio.create_task(w.run()))
-            for w in media_workers:
-                media_tasks.append(asyncio.create_task(w.run()))
+            media_tasks.append(asyncio.create_task(media_worker.run()))
         except Exception as e:
             for task in msg_tasks:
                 task.cancel()
