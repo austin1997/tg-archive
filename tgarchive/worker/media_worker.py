@@ -37,9 +37,10 @@ class MediaWorker:
                     self.db.remove_pending_message(msg.chat_id, msg.id)
                     continue
                 media = await self._handle_message(msg, media_id)
-                self.db.insert_media(media)
-                self.db.remove_pending_message(msg.chat_id, msg.id)
-                self.db.commit()
+                if media is not None:
+                    self.db.insert_media(media)
+                    self.db.remove_pending_message(msg.chat_id, msg.id)
+                    self.db.commit()
         finally:
             await self.downloader._cleanup()
             logging.info("MediaWorker cancelled.")
@@ -66,12 +67,16 @@ class MediaWorker:
                     # retry download
                     return await self._handle_message(msg, utils.get_media_id(msg))
         except (errors.FilerefUpgradeNeededError, errors.FileReferenceExpiredError) as e:
-            msg = self.client.get_messages(await msg.get_input_chat(), ids=msg.id)
+            msg = await self.client.get_messages(await msg.get_input_chat(), ids=msg.id)
             return await self._handle_message(msg, utils.get_media_id(msg))
         except Exception as e:
             logging.error(
                 "error downloading media: #{}: {}".format(msg.id, e))
             traceback.print_exc()
+            await asyncio.sleep(300)    # Sleep for 5 minutes
+            msg = await self.client.get_messages(await msg.get_input_chat(), ids=msg.id)
+            await self.downloader._cleanup()
+            return await self._handle_message(msg, utils.get_media_id(msg))
 
     async def _download_with_progress(self, msg: telethon.tl.custom.Message, rename_prefix="", **kwargs):
         def progress_callback(diff, total):
