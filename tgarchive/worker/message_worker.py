@@ -28,6 +28,11 @@ class MessageWorker:
             ids = None
             (group, from_id) = await self.input_queue.get()
             logging.info(f"Handling group {group}")
+            # try converting group to int
+            try:
+                group = int(group)
+            except ValueError:
+                pass
             group_entity = await self.client.get_entity(group)
             group_id = group_entity.id
             self.db.create_chat_table(group_id, group_entity.title)

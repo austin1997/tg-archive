@@ -31,9 +31,6 @@ class MediaWorker:
                 if media_id is None or msg.file is None:
                     logging.info("media in chat: {} msg: {} disappeared.".format(msg.chat_id, msg.id))
                     continue
-                if media_id in self.media_downloading:
-                    logging.info("media id: {} is already downloading".format(media_id))
-                    continue
                 cache = self.db.get_media(media_id)
                 if cache is not None:
                     logging.info("found media id: {} in cache".format(media_id))

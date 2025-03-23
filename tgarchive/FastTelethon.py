@@ -140,8 +140,8 @@ class DownloadSender:
                         pass
             queue.task_done()
 
-    def disconnect(self) -> Awaitable[None]:
-        return self.sender.disconnect()
+    async def disconnect(self) -> Awaitable[None]:
+        return await self.sender.disconnect()
 
 
 class UploadSender:
@@ -195,28 +195,25 @@ class ParallelTransferrer:
     client: TelegramClient
     loop: asyncio.AbstractEventLoop
     dc_id: int
-    senders: Optional[List[Union[DownloadSender, UploadSender]]]
+    senders: List[Union[DownloadSender, UploadSender]]
     # auth_key: AuthKey
     upload_ticker: int
-    sender_pool: dict[int, Tuple[List[Union[DownloadSender, UploadSender]], datetime]]
+    sender_created: datetime
 
     def __init__(self, client: TelegramClient) -> None:
         self.client = client
         self.loop = self.client.loop
-        self.senders = None
+        self.senders = []
         self.upload_ticker = 0
-        self.sender_pool = {}
+        self.sender_created = datetime.now()
         self.dc_id = -1
         self.auth_key = None
 
     async def _cleanup(self) -> None:
         # await asyncio.gather(*[sender.disconnect() for sender in self.senders])
-        self.senders = None
-        for dc, senders in self.sender_pool.items():
-            senders, _ = senders
-            for sender in senders:
-                await sender.disconnect()
-        self.sender_pool.clear()
+        for sender in self.senders:
+            await sender.disconnect()
+        self.senders.clear()
 
     @staticmethod
     def _get_connection_count(
@@ -230,17 +227,19 @@ class ParallelTransferrer:
         self, connections: int, dc_id: int, file: TypeLocation, part_size: int
     ) -> datetime:
         curr_time = datetime.now()
-        self.senders, created_time = self.sender_pool.get(dc_id, (None, None))
-        if self.senders is not None:
-            time_diff = curr_time - created_time
+        if self.senders is not None and dc_id == self.dc_id:
+            time_diff = curr_time - self.sender_created
             if time_diff.total_seconds() < MAX_CONNECTION_LIFETIME:
                 for sender in self.senders:
                     sender.reset_file(file, part_size)
-                return created_time
+                return self.sender_created
             logging.info("Clearing long-lasting connections and reconnect")
             for sender in self.senders:
                 await sender.disconnect()
 
+        await self._cleanup()
+        logging.info("Creating new connections")
+        self.sender_created = curr_time
         # The first cross-DC sender will export+import the authorization, so we always create it
         # before creating any other senders.
         self.senders = [
@@ -256,7 +255,6 @@ class ParallelTransferrer:
                 ]
             ),
         ]
-        self.sender_pool[dc_id] = (self.senders, curr_time)
         return curr_time
 
     async def _create_download_sender(
@@ -302,7 +300,10 @@ class ParallelTransferrer:
 
     async def _create_sender(self, dc_id: int) -> MTProtoSender:
         dc = await self.client._get_dc(dc_id)
-        sender = MTProtoSender(self.auth_key, loggers=self.client._log)
+        if dc_id == self.client.session.dc_id:
+            self.auth_key = self.client.session.auth_key
+            self.dc_id = dc_id
+        sender = MTProtoSender(None if dc_id != self.dc_id else self.auth_key, loggers=self.client._log)
         await sender.connect(
             self.client._connection(
                 dc.ip_address,
@@ -313,13 +314,17 @@ class ParallelTransferrer:
             )
         )
         if not self.auth_key or dc_id != self.dc_id:
+            me = await self.client.get_me()
+            logging.info(f"Migrating from DC {self.dc_id} to DC {dc_id}, client DC: {self.client.session.dc_id}")
             auth = await self.client(ExportAuthorizationRequest(dc_id))
+            logging.info("Exported authorization")
             self.client._init_request.query = ImportAuthorizationRequest(
                 id=auth.id, bytes=auth.bytes
             )
             req = InvokeWithLayerRequest(LAYER, self.client._init_request)
             # if self.client.session.takeout_id is not None:
             #     req = InvokeWithTakeoutRequest(self.client.session.takeout_id, req)
+            logging.info("Importing authorization")
             await sender.send(req)
             self.auth_key = sender.auth_key
             self.dc_id = dc_id
