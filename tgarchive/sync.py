@@ -387,7 +387,7 @@ class Sync:
         shutil.move(tmpfile_path, destination_path)
         return basename, os.path.basename(destination_path)
 
-    async def _download_media(self, msg) -> [str, str, str]:
+    async def _download_media(self, msg) -> Tuple[str, str, str]:
         """
         Download a media / file attached to a message and return its original
         filename, sanitized name on disk, and the thumbnail (if any). 
