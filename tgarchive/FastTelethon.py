@@ -230,12 +230,23 @@ class ParallelTransferrer:
         if self.senders is not None and dc_id == self.dc_id:
             time_diff = curr_time - self.sender_created
             if time_diff.total_seconds() < MAX_CONNECTION_LIFETIME:
+                if len(self.senders) <= connections:
+                    l = len(self.senders)
+                    self.senders = [
+                        *self.senders,
+                        *await asyncio.gather(
+                            *[
+                                self._create_download_sender(
+                                    dc_id, file, part_size
+                                )
+                                for i in range(l, connections)
+                            ]
+                        ),
+                    ]
                 for sender in self.senders:
                     sender.reset_file(file, part_size)
                 return self.sender_created
             logging.info("Clearing long-lasting connections and reconnect")
-            for sender in self.senders:
-                await sender.disconnect()
 
         await self._cleanup()
         logging.info("Creating new connections")
@@ -402,8 +413,8 @@ class ParallelTransferrer:
         process_callback = None
     ):
         part_size = (part_size_kb or telethon_utils.get_appropriated_part_size(file_size)) * 1024
-        # connection_count = connection_count or (min(part_count, 8))
-        connection_count = 8
+        part_count = (file_size + part_size - 1) // part_size
+        connection_count = min(part_count, 8 if connection_count is None else connection_count)
 
         out_file.seek(0)
         out_file.write(b"\0" * file_size)

@@ -91,14 +91,12 @@ class MediaWorker:
                     basename = str(utils.get_media_id(msg)) + telethon.utils.get_extension(msg.media)
                 tmpfile_path = await self.downloader.download(msg, download_folder=self.media_tmp_dir, filename=f"{utils.get_media_id(msg)}", progress_callback=progress_callback, **kwargs)
                 destination_path = os.path.join(self.media_dir, f"{rename_prefix}{basename}")
-                if os.path.exists(destination_path): # Create a new name if the file already exists
-                    base, extension = os.path.splitext(destination_path)
-                    i = 1
-                    new_path = f"{base}_{i}{extension}"
-                    while os.path.exists(new_path):
-                        i += 1
-                        new_path = f"{base}_{i}{extension}"
-                        destination_path = new_path
+                base, extension = os.path.splitext(destination_path)
+                i = 1
+                while os.path.exists(destination_path): # Create a new name if the file already exists
+                    logging.info(f"file {destination_path} already exists")
+                    destination_path = f"{base}_{i}{extension}"
+                    i += 1
                 # Move the file
                 logging.info(f"moving {tmpfile_path} to {destination_path}")
                 shutil.move(tmpfile_path, destination_path)
