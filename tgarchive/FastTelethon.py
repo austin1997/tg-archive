@@ -16,6 +16,7 @@ from typing import (
     Awaitable,
     BinaryIO,
     DefaultDict,
+    Dict,
     List,
     Optional,
     Tuple,
@@ -79,10 +80,12 @@ class DownloadSender:
         file: TypeLocation,
         offset: int,
         limit: int,
+        auth_key: Optional[AuthKey] = None,
     ) -> None:
         self.sender = sender
         self.client = client
         self.request = GetFileRequest(file, offset=offset, limit=limit)
+        self.auth_key = auth_key
     
     def reset_file(self, file: TypeLocation, part_size):
         self.request = GetFileRequest(file, 0, limit=part_size)
@@ -194,26 +197,29 @@ class UploadSender:
 class ParallelTransferrer:
     client: TelegramClient
     loop: asyncio.AbstractEventLoop
-    dc_id: int
-    senders: List[Union[DownloadSender, UploadSender]]
-    # auth_key: AuthKey
+    senders: Dict[int, Tuple[Union[DownloadSender, UploadSender], datetime]]
     upload_ticker: int
     sender_created: datetime
 
     def __init__(self, client: TelegramClient) -> None:
         self.client = client
         self.loop = self.client.loop
-        self.senders = []
+        self.senders = {}
+        self.connection_lock = asyncio.Lock()
         self.upload_ticker = 0
-        self.sender_created = datetime.now()
-        self.dc_id = -1
-        self.auth_key = None
 
-    async def _cleanup(self) -> None:
+    async def _cleanup(self, dc_id: Optional[int] = None) -> None:
         # await asyncio.gather(*[sender.disconnect() for sender in self.senders])
-        for sender in self.senders:
-            await sender.disconnect()
-        self.senders.clear()
+        if dc_id is not None:
+            if dc_id in self.senders:
+                for sender in self.senders[dc_id][0]:
+                    await sender.disconnect()
+                self.senders.pop(dc_id)
+        else:
+            for item in self.senders.values():
+                for sender in item[0]:
+                    await sender.disconnect()
+            self.senders.clear()
 
     @staticmethod
     def _get_connection_count(
@@ -226,60 +232,50 @@ class ParallelTransferrer:
     async def _init_download(
         self, connections: int, dc_id: int, file: TypeLocation, part_size: int
     ) -> datetime:
-        curr_time = datetime.now()
-        if self.senders is not None and dc_id == self.dc_id:
-            time_diff = curr_time - self.sender_created
-            if time_diff.total_seconds() < MAX_CONNECTION_LIFETIME:
-                if len(self.senders) <= connections:
-                    l = len(self.senders)
-                    self.senders = [
-                        *self.senders,
-                        *await asyncio.gather(
-                            *[
-                                self._create_download_sender(
-                                    dc_id, file, part_size
-                                )
-                                for i in range(l, connections)
-                            ]
-                        ),
-                    ]
-                for sender in self.senders:
-                    sender.reset_file(file, part_size)
-                return self.sender_created
-            logging.info("Clearing long-lasting connections and reconnect")
+        async with self.connection_lock:
+            curr_time = datetime.now()
+            if self.senders.get(dc_id, None) is not None:
+                time_diff = curr_time - self.senders[dc_id][1]
+                if time_diff.total_seconds() < MAX_CONNECTION_LIFETIME:
+                    for sender in self.senders[dc_id][0]:
+                        sender.reset_file(file, part_size)
+                    return self.senders[dc_id][1]
+                logging.info("Clearing long-lasting connections and reconnect")
 
-        await self._cleanup()
-        logging.info("Creating new connections")
-        self.sender_created = curr_time
-        # The first cross-DC sender will export+import the authorization, so we always create it
-        # before creating any other senders.
-        self.senders = [
-            await self._create_download_sender(
-                dc_id, file, part_size
-            ),
-            *await asyncio.gather(
-                *[
-                    self._create_download_sender(
-                        dc_id, file, part_size
-                    )
-                    for i in range(1, connections)
-                ]
-            ),
-        ]
-        return curr_time
+            await self._cleanup(dc_id)
+            logging.info(f"Creating new connections to DC {dc_id}")
+            # The first cross-DC sender will export+import the authorization, so we always create it
+            # before creating any other senders.
+            sender = await self._create_download_sender(dc_id, file, part_size)
+            senders = [
+                sender,
+                *await asyncio.gather(
+                    *[
+                        self._create_download_sender(
+                            dc_id, file, part_size, sender.auth_key
+                        )
+                        for i in range(1, connections)
+                    ]
+                ),
+            ]
+            self.senders[dc_id] = (senders, curr_time)
+            return curr_time
 
     async def _create_download_sender(
         self,
         dc_id: int,
         file: TypeLocation,
         part_size: int,
+        auth_key: Optional[AuthKey] = None,
     ) -> DownloadSender:
+        sender = await self._create_sender(dc_id, auth_key=auth_key)
         return DownloadSender(
             self.client,
-            await self._create_sender(dc_id),
+            sender[0],
             file,
             0,
-            part_size
+            part_size,
+            auth_key=sender[1]
         )
 
     async def _init_upload(
@@ -300,7 +296,7 @@ class ParallelTransferrer:
     ) -> UploadSender:
         return UploadSender(
             self.client,
-            await self._create_sender(self.client.session.dc_id),
+            await self._create_sender(self.client.session.dc_id)[0],
             file_id,
             part_count,
             big,
@@ -309,12 +305,11 @@ class ParallelTransferrer:
             loop=self.loop,
         )
 
-    async def _create_sender(self, dc_id: int) -> MTProtoSender:
+    async def _create_sender(self, dc_id: int, auth_key: AuthKey) -> Tuple[MTProtoSender, AuthKey]:
         dc = await self.client._get_dc(dc_id)
-        if dc_id == self.client.session.dc_id:
-            self.auth_key = self.client.session.auth_key
-            self.dc_id = dc_id
-        sender = MTProtoSender(None if dc_id != self.dc_id else self.auth_key, loggers=self.client._log)
+        if auth_key is None and dc_id == self.client.session.dc_id:
+            auth_key = self.client.session.auth_key
+        sender = MTProtoSender(auth_key, loggers=self.client._log)
         await sender.connect(
             self.client._connection(
                 dc.ip_address,
@@ -324,9 +319,9 @@ class ParallelTransferrer:
                 proxy=self.client._proxy,
             )
         )
-        if not self.auth_key or dc_id != self.dc_id:
+        if auth_key is None:
             me = await self.client.get_me()
-            logging.info(f"Migrating from DC {self.dc_id} to DC {dc_id}, client DC: {self.client.session.dc_id}")
+            logging.info(f"Migrating to DC {dc_id}, client DC: {self.client.session.dc_id}")
             auth = await self.client(ExportAuthorizationRequest(dc_id))
             logging.info("Exported authorization")
             self.client._init_request.query = ImportAuthorizationRequest(
@@ -337,9 +332,8 @@ class ParallelTransferrer:
             #     req = InvokeWithTakeoutRequest(self.client.session.takeout_id, req)
             logging.info("Importing authorization")
             await sender.send(req)
-            self.auth_key = sender.auth_key
-            self.dc_id = dc_id
-        return sender
+            auth_key = sender.auth_key
+        return (sender, auth_key)
 
     async def init_upload(
         self,
@@ -414,7 +408,7 @@ class ParallelTransferrer:
     ):
         part_size = (part_size_kb or telethon_utils.get_appropriated_part_size(file_size)) * 1024
         part_count = (file_size + part_size - 1) // part_size
-        connection_count = min(part_count, 8 if connection_count is None else connection_count)
+        connection_count = 8
 
         out_file.seek(0)
         out_file.write(b"\0" * file_size)
@@ -435,7 +429,7 @@ class ParallelTransferrer:
             while not queue.empty():
                 connection_created_time = await self._init_download(connection_count, dc_id, file, part_size)
                 tasks = []
-                for sender in self.senders:
+                for sender in self.senders[dc_id][0]:
                     task = asyncio.create_task(sender.run(queue, out_file, connection_created_time, None, process_callback))
                     tasks.append(task)
                 await asyncio.gather(*tasks)
@@ -462,7 +456,7 @@ def stream_file(file_to_stream: BinaryIO, chunk_size=1024):
 
 
 async def _internal_transfer_to_telegram(
-    client: TelegramClient, response: BinaryIO, progress_callback: callable
+    client: TelegramClient, response: BinaryIO, progress_callback: callable, filename: str
 ) -> Tuple[TypeInputFile, int]:
     file_id = helpers.generate_random_long()
     file_size = os.path.getsize(response.name)
@@ -504,9 +498,7 @@ async def _internal_transfer_to_telegram(
 async def upload_file(
     client: TelegramClient,
     file: BinaryIO,
-    name,
+    name: str,
     progress_callback: callable = None,
 ) -> TypeInputFile:
-    global filename
-    filename = name
-    return (await _internal_transfer_to_telegram(client, file, progress_callback))[0]
+    return (await _internal_transfer_to_telegram(client, file, progress_callback, name))[0]
