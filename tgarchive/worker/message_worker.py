@@ -1,5 +1,6 @@
 import os
 from io import BytesIO
+import traceback
 from PIL import Image
 import asyncio
 import logging
@@ -33,7 +34,12 @@ class MessageWorker:
                 group = int(group)
             except ValueError:
                 pass
-            group_entity = await self.client.get_entity(group)
+            try:
+                group_entity = await self.client.get_entity(group)
+            except Exception as e:
+                traceback.print_exc()
+                logging.error("error getting group entity: #{}: {}".format(group, e))
+                continue
             group_id = group_entity.id
             self.db.create_chat_table(group_id, group_entity.title)
 
