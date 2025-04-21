@@ -114,7 +114,7 @@ class MediaWorker:
 
         # If it's a photo, download the thumbnail.
         tname = None
-        if isinstance(msg.media, telethon.tl.types.MessageMediaPhoto):
-            _, tname = await self._download_with_progress(msg, "thumb_", thumb=1)
+        # if isinstance(msg.media, telethon.tl.types.MessageMediaPhoto):
+        #     _, tname = await self._download_with_progress(msg, "thumb_", thumb=1)
 
         return basename, newname, tname
