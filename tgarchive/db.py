@@ -298,7 +298,7 @@ class DB:
 
     def insert_message(self, chat_id: int, m: Message):
         with self.conn:
-            self.conn.execute("""INSERT OR REPLACE INTO "{}"
+            self.conn.execute("""INSERT OR IGNORE INTO "{}"
                 (id, type, date, edit_date, content, reply_to, user_id, media_id)
                 VALUES(?, ?, ?, ?, ?, ?, ?, ?)""".format(chat_id),
                         (

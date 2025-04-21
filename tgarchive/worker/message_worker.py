@@ -67,6 +67,15 @@ class MessageWorker:
             return
         chat_id = (await msg.get_chat()).id
         message = await self._get_message(msg)
+        try:
+            async for reply in self.client.iter_messages(chat_id, reverse=True, reply_to=msg.id):
+                logging.info("fetching replies to message id={} ({})".format(msg.id, reply.id))
+                await self.handle_message(reply)
+        except telethon.errors.PeerIdInvalidError:
+            pass
+        except Exception as e:
+            logging.error("Error while handling message: {}".format(e))
+            raise e
 
         # Insert the records into DB.
         self.db.insert_user(message.user)
