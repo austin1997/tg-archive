@@ -75,6 +75,7 @@ class MessageWorker:
         chat_id = (await msg.get_chat()).id
         message = await self._get_message(msg)
         if self.group_entity is not None and isinstance(self.group_entity, telethon.types.Channel) and self.group_entity.broadcast:
+            logging.info("fetching replies to message id={}".format(msg.id))
             try:
                 async for reply in self.client.iter_messages(self.group_entity, reverse=True, reply_to=msg.id):
                     logging.info("fetching replies to message id={} ({})".format(msg.id, reply.id))
