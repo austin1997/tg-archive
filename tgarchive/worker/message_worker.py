@@ -21,7 +21,7 @@ class MessageWorker:
         self.config = config
         self.group_entity = None
 
-    def get_group_entity(self, group):
+    async def get_group_entity(self, group):
         logging.info(f"Handling group {group}")
         # try converting group to int
         try:
@@ -44,7 +44,7 @@ class MessageWorker:
         while not self.input_queue.empty():
             ids = None
             (group, from_id) = await self.input_queue.get()
-            self.get_group_entity(group)
+            await self.get_group_entity(group)
             if self.group_entity is None:
                 continue
             group_id = self.group_entity.id
