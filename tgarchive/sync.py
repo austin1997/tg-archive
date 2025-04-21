@@ -111,7 +111,7 @@ class Sync:
                 msg_queue.put_nowait(msg)
             except Exception as e:
                 logging.error("error getting pending message chat_id: {}, msg_id: {}: {}".format(chat_id, message_id, e))
-                self.db.remove_pending_message(chat_id, message_id)
+                # self.db.remove_pending_message(chat_id, message_id)
 
         msg_workers = [worker.MessageWorker(media_queue, chat_queue, msg_queue, self.client, self.db, self.config) for _ in range(len(self.config["groups"])) ]
         media_worker = worker.MediaWorker(media_queue, self.client, self.db, self.media_dir, self.media_tmp_dir)

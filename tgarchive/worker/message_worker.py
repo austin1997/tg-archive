@@ -55,22 +55,23 @@ class MessageWorker:
                 logging.info("fetching from last message id={} ({})".format(
                     last_id, last_date))
             
+            last_id = None
             n = 0
             async for msg in self.client.iter_messages(group_entity, reverse=True, offset_id=last_id if last_id is not None else 0, ids=ids):
                 last_date = msg.date
                 n += 1
-                await self.handle_message(msg)
+                await self.handle_message(group_entity, msg)
             logging.info("{} finished. fetched {} messages. last message = {}".format(group_id, n, last_date))
 
-    async def handle_message(self, msg: telethon.tl.custom.Message):
+    async def handle_message(self, group_entity, msg: telethon.tl.custom.Message):
         if msg is None:
             return
         chat_id = (await msg.get_chat()).id
         message = await self._get_message(msg)
         try:
-            async for reply in self.client.iter_messages(chat_id, reverse=True, reply_to=msg.id):
+            async for reply in self.client.iter_messages(group_entity, reverse=True, reply_to=msg.id):
                 logging.info("fetching replies to message id={} ({})".format(msg.id, reply.id))
-                await self.handle_message(reply)
+                await self.handle_message(group_entity, reply)
         except telethon.errors.PeerIdInvalidError:
             pass
         except Exception as e:
