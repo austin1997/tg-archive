@@ -61,7 +61,7 @@ class MessageWorker:
                 logging.info("fetching from last message id={} ({})".format(
                     last_id, last_date))
             
-            last_id = None
+            # last_id = None
             n = 0
             async for msg in self.client.iter_messages(self.group_entity, reverse=True, offset_id=last_id if last_id is not None else 0, ids=ids):
                 last_date = msg.date
