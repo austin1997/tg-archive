@@ -67,6 +67,8 @@ class MessageWorker:
                 last_date = msg.date
                 n += 1
                 await self.handle_message(msg)
+                if n % 1000 == 0:
+                    logging.info("fetched {} messages. last message = {}: {}".format(n, msg.id, last_date))
             logging.info("{} finished. fetched {} messages. last message = {}".format(group_id, n, last_date))
 
     async def handle_message(self, msg: telethon.tl.custom.Message):
