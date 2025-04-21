@@ -19,30 +19,36 @@ class MessageWorker:
         self.client = client
         self.db = database
         self.config = config
+        self.group_entity = None
+
+    def get_group_entity(self, group):
+        logging.info(f"Handling group {group}")
+        # try converting group to int
+        try:
+            group = int(group)
+        except ValueError:
+            pass
+        try:
+            self.group_entity = await self.client.get_entity(group)
+        except Exception as e:
+            traceback.print_exc()
+            logging.error("error getting group entity: #{}: {}".format(group, e))
 
     async def run(self):
         while not self.pending_msgs.empty():
             message = await self.pending_msgs.get()
             logging.info(f"Processing pending message {message.id} from chat {message.chat_id}")
+
             await self.handle_message(message)
 
         while not self.input_queue.empty():
             ids = None
             (group, from_id) = await self.input_queue.get()
-            logging.info(f"Handling group {group}")
-            # try converting group to int
-            try:
-                group = int(group)
-            except ValueError:
-                pass
-            try:
-                group_entity = await self.client.get_entity(group)
-            except Exception as e:
-                traceback.print_exc()
-                logging.error("error getting group entity: #{}: {}".format(group, e))
+            self.get_group_entity(group)
+            if self.group_entity is None:
                 continue
-            group_id = group_entity.id
-            self.db.create_chat_table(group_id, group_entity.title)
+            group_id = self.group_entity.id
+            self.db.create_chat_table(group_id, self.group_entity.title)
 
             if ids is not None:
                 last_id, last_date = (ids, None)
@@ -57,26 +63,27 @@ class MessageWorker:
             
             last_id = None
             n = 0
-            async for msg in self.client.iter_messages(group_entity, reverse=True, offset_id=last_id if last_id is not None else 0, ids=ids):
+            async for msg in self.client.iter_messages(self.group_entity, reverse=True, offset_id=last_id if last_id is not None else 0, ids=ids):
                 last_date = msg.date
                 n += 1
-                await self.handle_message(group_entity, msg)
+                await self.handle_message(msg)
             logging.info("{} finished. fetched {} messages. last message = {}".format(group_id, n, last_date))
 
-    async def handle_message(self, group_entity, msg: telethon.tl.custom.Message):
+    async def handle_message(self, msg: telethon.tl.custom.Message):
         if msg is None:
             return
         chat_id = (await msg.get_chat()).id
         message = await self._get_message(msg)
-        try:
-            async for reply in self.client.iter_messages(group_entity, reverse=True, reply_to=msg.id):
-                logging.info("fetching replies to message id={} ({})".format(msg.id, reply.id))
-                await self.handle_message(group_entity, reply)
-        except telethon.errors.PeerIdInvalidError:
-            pass
-        except Exception as e:
-            logging.error("Error while handling message: {}".format(e))
-            raise e
+        if self.group_entity is not None and isinstance(self.group_entity, telethon.types.Channel) and self.group_entity.broadcast:
+            try:
+                async for reply in self.client.iter_messages(self.group_entity, reverse=True, reply_to=msg.id):
+                    logging.info("fetching replies to message id={} ({})".format(msg.id, reply.id))
+                    await self.handle_message(reply)
+            except telethon.errors.PeerIdInvalidError:
+                pass
+            except Exception as e:
+                logging.error("Error while handling message: {}".format(e))
+                raise e
 
         # Insert the records into DB.
         self.db.insert_user(message.user)
