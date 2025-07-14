@@ -95,23 +95,29 @@ class Sync:
         Sync syncs messages from Telegram from the last synced message
         into the local SQLite DB.
         """
-        self.db.print_tabels()
+        # Initialize async database connection
+        await self.db.async_db.connect()
+        self.db = self.db.async_db
+        await self.db.print_tabels()
         _ = await self.client.get_dialogs()
         chat_queue = asyncio.Queue()
         msg_queue = asyncio.Queue(16)
-        media_queue = asyncio.Queue(4)
+        media_queue = asyncio.Queue(1)
         for group in self.config["groups"]:
             chat_queue.put_nowait((group, from_id))
         
-        pending_msgs = self.db.get_pending_messages()
+        pending_msgs = await self.db.get_pending_messages()
         for chat_id, message_id in pending_msgs:
             logging.info("Pushing pending message id={} from chat_id={} to queue".format(message_id, chat_id))
             try:
                 msg = await self.client.get_messages(await self.client.get_entity(chat_id), ids=message_id)
+                if msg is None:
+                    logging.info("Got None message in pending queue")
+                    continue
                 msg_queue.put_nowait(msg)
             except Exception as e:
                 logging.error("error getting pending message chat_id: {}, msg_id: {}: {}".format(chat_id, message_id, e))
-                # self.db.remove_pending_message(chat_id, message_id)
+                # await self.db.remove_pending_message(chat_id, message_id)
 
         msg_workers = [worker.MessageWorker(media_queue, chat_queue, msg_queue, self.client, self.db, self.config) for _ in range(len(self.config["groups"])) ]
         media_worker = worker.MediaWorker(media_queue, self.client, self.db, self.media_dir, self.media_tmp_dir)
@@ -135,6 +141,7 @@ class Sync:
             await msg_queue.join()
             await media_queue.join()
             await chat_queue.join()
+            await self.db.close()
 
     def new_client(self, session, config):
         if "proxy" in config and config["proxy"].get("enable"):
@@ -178,7 +185,7 @@ class Sync:
                     sticker = alt[0]
             elif isinstance(msg.media, telethon.tl.types.MessageMediaPoll):
                 poll = self._make_poll(msg)
-                self.db.insert_poll(poll)
+                await self.db.insert_poll(poll)
                 media_id = 0
             elif isinstance(msg.media, telethon.tl.types.MessageMediaWebPage) and \
                 not isinstance(msg.media.webpage, telethon.tl.types.WebPageEmpty):
@@ -190,13 +197,13 @@ class Sync:
                     description=msg.media.webpage.description if msg.media.webpage.description else None
                 )
                 media_id = 1
-                self.db.insert_webpage(webpage)
+                await self.db.insert_webpage(webpage)
             if self.config["download_media"] and \
                 isinstance(msg.media, (telethon.tl.types.MessageMediaPhoto,
                                        telethon.tl.types.MessageMediaDocument,
                                        telethon.tl.types.MessageMediaContact)):
                 med = await self._get_media(msg)
-                self.db.insert_media(med)
+                await self.db.insert_media(med)
                 media_id = med.id
             else:
                 logging.info("unknown media type: {}".format(msg.media))
@@ -312,7 +319,7 @@ class Sync:
             logging.info("checking media id: {}, name: {} in cache".format(media_id, msg.file.name))
             if media_id is None:
                 raise
-            cache = self.db.get_media(media_id, None)
+            cache = await self.db.get_media(media_id)
             if cache is not None:
                 logging.info("found media id: {} in cache".format(media_id))
                 return cache

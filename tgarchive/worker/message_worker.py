@@ -12,7 +12,7 @@ from telethon import TelegramClient
 from tgarchive import db, utils
 
 class MessageWorker:
-    def __init__(self, output_queue: asyncio.Queue, input_queue: asyncio.Queue, pending_msgs: asyncio.Queue, client: TelegramClient, database: db.DB, config: dict):
+    def __init__(self, output_queue: asyncio.Queue, input_queue: asyncio.Queue, pending_msgs: asyncio.Queue, client: TelegramClient, database: db.AsyncDB, config: dict):
         self.output_queue = output_queue
         self.input_queue = input_queue
         self.pending_msgs = pending_msgs
@@ -48,7 +48,10 @@ class MessageWorker:
             if self.group_entity is None:
                 continue
             group_id = self.group_entity.id
-            self.db.create_chat_table(group_id, self.group_entity.title)
+            if isinstance(self.group_entity, telethon.tl.types.Channel):
+                await self.db.create_chat_table(group_id, self.group_entity.title)
+            else:
+                await self.db.create_chat_table(group_id, self.group_entity.username)
 
             if ids is not None:
                 last_id, last_date = (ids, None)
@@ -57,7 +60,7 @@ class MessageWorker:
                 last_id, last_date = (from_id, None)
                 logging.info("fetching from last message id={}".format(last_id))
             else:
-                last_id, last_date = self.db.get_last_message_id(group_id)
+                last_id, last_date = await self.db.get_last_message_id(group_id)
                 logging.info("fetching from last message id={} ({})".format(
                     last_id, last_date))
             
@@ -71,29 +74,29 @@ class MessageWorker:
                     logging.info("fetched {} messages. last message = {}: {}".format(n, msg.id, last_date))
             logging.info("{} finished. fetched {} messages. last message = {}".format(group_id, n, last_date))
 
-    async def handle_message(self, msg: telethon.tl.custom.Message):
+    async def handle_message(self, msg: telethon.tl.custom.Message, is_reply=False):
         if msg is None:
             return
         chat_id = (await msg.get_chat()).id
         message = await self._get_message(msg)
         if self.group_entity is not None and isinstance(self.group_entity, telethon.types.Channel) and self.group_entity.broadcast:
-            # logging.info("fetching replies to message id={}".format(msg.id))
-            try:
-                async for reply in self.client.iter_messages(self.group_entity, reverse=True, reply_to=msg.id):
-                    logging.info("fetching replies to message id={} ({})".format(msg.id, reply.id))
-                    await self.handle_message(reply)
-            except (telethon.errors.PeerIdInvalidError,
-                    telethon.errors.rpcerrorlist.MsgIdInvalidError):
-                pass
-            except Exception as e:
-                logging.error("Error while handling message: {}".format(e))
-                raise e
+            if not is_reply:
+                try:
+                    async for reply in self.client.iter_messages(self.group_entity, reverse=True, reply_to=msg.id):
+                        logging.info("fetching replies to message id={} ({}), at chat {}".format(msg.id, reply.id, self.group_entity.title))
+                        await self.handle_message(reply, True)
+                except (telethon.errors.PeerIdInvalidError,
+                        telethon.errors.rpcerrorlist.MsgIdInvalidError):
+                    pass
+                except Exception as e:
+                    logging.error("Error while handling reply message: {}".format(e))
+                    raise e
 
         # Insert the records into DB.
-        self.db.insert_user(message.user)
-        self.db.insert_message(chat_id, message)
+        await self.db.insert_user(message.user)
+        await self.db.insert_message(chat_id, message)
 
-        self.db.commit()
+        await self.db.commit()
 
     async def _get_message(self, msg: telethon.tl.custom.Message) -> db.Message:
         # https://docs.telethon.dev/en/latest/quick-references/objects-reference.html#message
@@ -125,7 +128,7 @@ class MessageWorker:
             elif isinstance(msg.media, telethon.tl.types.MessageMediaPoll):
                 poll = self._make_poll(msg)
                 if poll is not None:
-                    self.db.insert_poll(poll)
+                    await self.db.insert_poll(poll)
                 else:
                     logging.info(f"poll media in chat_id: {msg.chat_id}, msg_id: {msg.id} disappeared.")
                 media_id = 0
@@ -147,7 +150,7 @@ class MessageWorker:
                         description=msg.media.webpage.description if msg.media.webpage.description else None
                     )
                 media_id = 1
-                self.db.insert_webpage(webpage)
+                await self.db.insert_webpage(webpage)
             elif self.config["download_media"] and \
                 isinstance(msg.media, (telethon.tl.types.MessageMediaPhoto,
                                        telethon.tl.types.MessageMediaDocument,
@@ -155,8 +158,8 @@ class MessageWorker:
                 media_id = await self._get_media(msg)
                 if media_id is None:
                     logging.warning("Got None media_id in chat_id:{}, msg_id: {}".format(msg.chat_id, msg.id))
-                if media_id is not None and self.db.get_media(media_id) is None:
-                    self.db.insert_pending_message(msg.chat_id, msg.id)
+                if media_id is not None and await self.db.get_media(media_id) is None:
+                    await self.db.insert_pending_message(msg.chat_id, msg.id)
                     await self.output_queue.put(msg)
                 else:
                     logging.info("found media id: {} in cache".format(media_id))
@@ -195,16 +198,16 @@ class MessageWorker:
 
         # Download the file into a container, resize it, and then write to disk.
         b = BytesIO()
-        profile_photo = await self.client.download_profile_photo(user, file=b)
-        if profile_photo is None:
-            logging.info("user has no avatar #{}".format(user.id))
+        try:
+            await self.client.download_media(user.photo, b)
+            b.seek(0)
+            img = Image.open(b)
+            img = img.resize(self.config["avatar_size"])
+            img.save(fpath, "JPEG")
+            return fname
+        except Exception as e:
+            logging.error("error downloading avatar: #{}: {}".format(user.id, e))
             return None
-
-        im = Image.open(b)
-        im.thumbnail(self.config["avatar_size"], Image.LANCZOS)
-        im.save(fpath, "JPEG")
-
-        return fname
 
     async def _downloadAvatarForUserOrChat(self, entity):
         avatar = None
@@ -272,23 +275,14 @@ class MessageWorker:
         )
 
     def _make_poll(self, msg: telethon.tl.custom.Message) -> db.Poll:
-        if not msg.media.results or not msg.media.results.results:
+        if not isinstance(msg.media, telethon.tl.types.MessageMediaPoll):
             return None
-
-        options = [{"label": a.text.text, "count": 0, "correct": False}
-                   for a in msg.media.poll.answers]
-
-        total = msg.media.results.total_voters
-        if msg.media.results.results:
-            for i, r in enumerate(msg.media.results.results):
-                options[i]["count"] = r.voters
-                options[i]["percent"] = r.voters / \
-                    total * 100 if total > 0 else 0
-                options[i]["correct"] = r.correct
-
+        poll = msg.media.poll
+        if poll is None:
+            return None
         return db.Poll(
             chat_id=msg.chat_id,
             message_id=msg.id,
-            title=msg.media.poll.question.text,
-            description=json.dumps(options)
+            title=poll.question,
+            description=json.dumps([a.text for a in poll.answers])
         )

@@ -6,11 +6,12 @@ import pkg_resources
 import re
 import shutil
 import magic
+from datetime import datetime
 
 from feedgen.feed import FeedGenerator
 from jinja2 import Template
 
-from .db import User, Message
+from .db import DB
 
 
 _NL2BR = re.compile(r"\n\n+")
@@ -21,7 +22,7 @@ class Build:
     template = None
     db = None
 
-    def __init__(self, config, db, symlink):
+    def __init__(self, config, db: DB, symlink):
         self.config = config
         self.db = db
         self.symlink = symlink
@@ -34,11 +35,14 @@ class Build:
         self.page_ids = {}
         self.timeline = OrderedDict()
 
-    def build(self):
+    async def build(self):
         # (Re)create the output directory.
         self._create_publish_dir()
 
-        timeline = list(self.db.get_timeline())
+        # Initialize async database connection
+        await self.db.async_db.connect()
+
+        timeline = await self.db.get_timeline()
         if len(timeline) == 0:
             logging.info("no data found to publish site")
             quit()
@@ -54,19 +58,20 @@ class Build:
         for month in timeline:
             # Get the days + message counts for the month.
             dayline = OrderedDict()
-            for d in self.db.get_dayline(month.date.year, month.date.month, self.config["per_page"]):
+            days = await self.db.get_dayline(month.date.year, month.date.month, self.config["per_page"])
+            for d in days:
                 dayline[d.slug] = d
 
             # Paginate and fetch messages for the month until the end..
             page = 0
             last_id = 0
-            total = self.db.get_message_count(
+            total = await self.db.get_message_count(
                 month.date.year, month.date.month)
             total_pages = math.ceil(total / self.config["per_page"])
 
             while True:
-                messages = list(self.db.get_messages(month.date.year, month.date.month,
-                                                     last_id, self.config["per_page"]))
+                messages = await self.db.get_messages(month.date.year, month.date.month,
+                                                     last_id, self.config["per_page"])
 
                 if len(messages) == 0:
                     break

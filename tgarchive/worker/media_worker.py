@@ -13,7 +13,7 @@ from tgarchive import db, utils, FastTelethon
 import traceback
 
 class MediaWorker:
-    def __init__(self, input_queue: asyncio.Queue, client: TelegramClient, database: db.DB, media_dir: str, media_tmp_dir: str):
+    def __init__(self, input_queue: asyncio.Queue, client: TelegramClient, database: db.AsyncDB, media_dir: str, media_tmp_dir: str):
         self.input_queue = input_queue
         self.client = client
         self.db = database
@@ -31,16 +31,16 @@ class MediaWorker:
                 if media_id is None or msg.file is None:
                     logging.info("media in chat: {} msg: {} disappeared.".format(msg.chat_id, msg.id))
                     continue
-                cache = self.db.get_media(media_id)
+                cache = await self.db.get_media(media_id)
                 if cache is not None:
                     logging.info("found media id: {} in cache".format(media_id))
-                    self.db.remove_pending_message(msg.chat_id, msg.id)
+                    await self.db.remove_pending_message(msg.chat_id, msg.id)
                     continue
                 media = await self._handle_message(msg, media_id)
                 if media is not None:
-                    self.db.insert_media(media)
-                    self.db.remove_pending_message(msg.chat_id, msg.id)
-                    self.db.commit()
+                    await self.db.insert_media(media)
+                    await self.db.remove_pending_message(msg.chat_id, msg.id)
+                    await self.db.commit()
         finally:
             await self.downloader._cleanup()
             logging.info("MediaWorker cancelled.")

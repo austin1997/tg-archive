@@ -147,6 +147,7 @@ def main():
 
     # Build static site.
     elif args.build:
+        import asyncio
         from .build import Build
 
         logging.info("building site")
@@ -155,6 +156,6 @@ def main():
         b.load_template(args.template)
         if args.rss_template:
             b.load_rss_template(args.rss_template)
-        b.build()
+        asyncio.run(b.build())
 
         logging.info("published to directory '{}'".format(config["publish_dir"]))
