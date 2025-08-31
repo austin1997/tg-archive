@@ -14,6 +14,7 @@ from PIL import Image
 from telethon import TelegramClient, errors
 import telethon.tl.custom
 import telethon.tl.types
+import telethon.events
 
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
@@ -102,8 +103,10 @@ class Sync:
         _ = await self.client.get_dialogs()
         chat_queue = asyncio.Queue()
         msg_queue = asyncio.Queue(16)
-        media_queue = asyncio.Queue(1)
+        media_queue = utils.OrderedPriorityQueue(1)
+        chat_ids = []
         for group in self.config["groups"]:
+            chat_ids.append(await self._get_group_entity(group).id)
             chat_queue.put_nowait((group, from_id))
         
         pending_msgs = await self.db.get_pending_messages()
@@ -119,14 +122,22 @@ class Sync:
                 logging.error("error getting pending message chat_id: {}, msg_id: {}: {}".format(chat_id, message_id, e))
                 # await self.db.remove_pending_message(chat_id, message_id)
 
+        downloader = FastTelethon.ParallelTransferrer(self.client)
         msg_workers = [worker.MessageWorker(media_queue, chat_queue, msg_queue, self.client, self.db, self.config) for _ in range(len(self.config["groups"])) ]
-        media_worker = worker.MediaWorker(media_queue, self.client, self.db, self.media_dir, self.media_tmp_dir)
+        media_worker = worker.MediaWorker(media_queue, self.client, self.db, downloader, self.media_dir, self.media_tmp_dir)
         msg_tasks = []
         media_tasks = []
         try:
             for w in msg_workers:
                 msg_tasks.append(asyncio.create_task(w.run()))
             media_tasks.append(asyncio.create_task(media_worker.run()))
+
+            async def new_message_handler(event: telethon.events.NewMessage.Event):
+                if event.chat_id in chat_ids:
+                    logging.info("New message received in chat_id: {}, msg_id: {}".format(event.chat_id, event.message.id))
+                    await msg_workers[0].handle_message(event.message, False, 0, True)
+
+            self.client.add_event_handler(new_message_handler, telethon.events.NewMessage)
         except Exception as e:
             for task in msg_tasks:
                 task.cancel()
@@ -141,6 +152,7 @@ class Sync:
             await msg_queue.join()
             await media_queue.join()
             await chat_queue.join()
+            await downloader._cleanup()
             await self.db.close()
 
     def new_client(self, session, config):

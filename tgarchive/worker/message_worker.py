@@ -12,7 +12,7 @@ from telethon import TelegramClient
 from tgarchive import db, utils
 
 class MessageWorker:
-    def __init__(self, output_queue: asyncio.Queue, input_queue: asyncio.Queue, pending_msgs: asyncio.Queue, client: TelegramClient, database: db.AsyncDB, config: dict):
+    def __init__(self, output_queue: utils.OrderedPriorityQueue, input_queue: asyncio.Queue, pending_msgs: utils.OrderedPriorityQueue, client: TelegramClient, database: db.AsyncDB, config: dict):
         self.output_queue = output_queue
         self.input_queue = input_queue
         self.pending_msgs = pending_msgs
@@ -39,7 +39,7 @@ class MessageWorker:
             message = await self.pending_msgs.get()
             logging.info(f"Processing pending message {message.id} from chat {message.chat_id}")
 
-            await self.handle_message(message)
+            await self.handle_message(message, True)
 
         while not self.input_queue.empty():
             ids = None
@@ -69,22 +69,22 @@ class MessageWorker:
             async for msg in self.client.iter_messages(self.group_entity, reverse=True, offset_id=last_id if last_id is not None else 0, ids=ids):
                 last_date = msg.date
                 n += 1
-                await self.handle_message(msg)
+                await self.handle_message(msg, True)
                 if n % 1000 == 0:
                     logging.info("fetched {} messages. last message = {}: {}".format(n, msg.id, last_date))
             logging.info("{} finished. fetched {} messages. last message = {}".format(group_id, n, last_date))
 
-    async def handle_message(self, msg: telethon.tl.custom.Message, is_reply=False):
+    async def handle_message(self, msg: telethon.tl.custom.Message, search_replies: bool, priority: int = 1, remove_date: bool = False):
         if msg is None:
             return
         chat_id = (await msg.get_chat()).id
-        message = await self._get_message(msg)
+        message = await self._get_message(msg, priority, remove_date)
         if self.group_entity is not None and isinstance(self.group_entity, telethon.types.Channel) and self.group_entity.broadcast:
-            if not is_reply:
+            if search_replies:
                 try:
                     async for reply in self.client.iter_messages(self.group_entity, reverse=True, reply_to=msg.id):
                         logging.info("fetching replies to message id={} ({}), at chat {}".format(msg.id, reply.id, self.group_entity.title))
-                        await self.handle_message(reply, True)
+                        await self.handle_message(reply, False)
                 except (telethon.errors.PeerIdInvalidError,
                         telethon.errors.rpcerrorlist.MsgIdInvalidError):
                     pass
@@ -98,7 +98,7 @@ class MessageWorker:
 
         await self.db.commit()
 
-    async def _get_message(self, msg: telethon.tl.custom.Message) -> db.Message:
+    async def _get_message(self, msg: telethon.tl.custom.Message, priority: int, remove_date: bool = False) -> db.Message:
         # https://docs.telethon.dev/en/latest/quick-references/objects-reference.html#message
 
         # Message.
@@ -160,7 +160,7 @@ class MessageWorker:
                     logging.warning("Got None media_id in chat_id:{}, msg_id: {}".format(msg.chat_id, msg.id))
                 if media_id is not None and await self.db.get_media(media_id) is None:
                     await self.db.insert_pending_message(msg.chat_id, msg.id)
-                    await self.output_queue.put(msg)
+                    await self.output_queue.put(priority, msg)
                 else:
                     logging.info("found media id: {} in cache".format(media_id))
             else:
@@ -169,7 +169,7 @@ class MessageWorker:
         return db.Message(
             type=typ,
             id=msg.id,
-            date=msg.date,
+            date=None if remove_date else msg.date,
             edit_date=msg.edit_date,
             content=sticker if sticker else msg.raw_text,
             reply_to=msg.reply_to_msg_id if msg.reply_to and msg.reply_to.reply_to_msg_id else None,

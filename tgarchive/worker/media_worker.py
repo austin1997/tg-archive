@@ -13,18 +13,18 @@ from tgarchive import db, utils, FastTelethon
 import traceback
 
 class MediaWorker:
-    def __init__(self, input_queue: asyncio.Queue, client: TelegramClient, database: db.AsyncDB, media_dir: str, media_tmp_dir: str):
+    def __init__(self, input_queue: utils.OrderedPriorityQueue, client: TelegramClient, database: db.AsyncDB, downloader: FastTelethon.ParallelTransferrer, media_dir: str, media_tmp_dir: str):
         self.input_queue = input_queue
         self.client = client
         self.db = database
         self.media_dir = media_dir
         self.media_tmp_dir = media_tmp_dir
-        self.downloader = FastTelethon.ParallelTransferrer(self.client)
+        self.downloader = downloader
     
     async def run(self):
         try:
             while True:
-                msg: telethon.tl.custom.Message = await self.input_queue.get()
+                _, msg = await self.input_queue.get()
                 if msg is None:
                     break
                 media_id = utils.get_media_id(msg)

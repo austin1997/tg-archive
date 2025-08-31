@@ -29,7 +29,7 @@ def create_new_table(cur: sqlite3.Cursor, name: str):
         CREATE table IF NOT EXISTS "{}" (
             id INTEGER NOT NULL,
             type TEXT NOT NULL,
-            date TIMESTAMP NOT NULL,
+            date TIMESTAMP,
             edit_date TIMESTAMP,
             content TEXT,
             reply_to INTEGER,
@@ -73,6 +73,7 @@ for id, _ in chats:
     copy_table(cur, target_name, temp_name)
     drop_table(cur, target_name)
     rename_table(cur, temp_name, target_name)
+print("Done")
 
 # %%
 cur.execute("SELECT name FROM sqlite_master WHERE type='table';")

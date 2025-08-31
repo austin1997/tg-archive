@@ -27,7 +27,7 @@ create_chat_schema = """
 CREATE table IF NOT EXISTS "{}" (
     id INTEGER NOT NULL,
     type TEXT NOT NULL,
-    date TIMESTAMP NOT NULL,
+    date TIMESTAMP,
     edit_date TIMESTAMP,
     content TEXT,
     reply_to INTEGER,
@@ -163,6 +163,7 @@ class AsyncDB:
         assert(self.conn)
         async with self.conn.execute("""
             SELECT id, strftime('%Y-%m-%d 00:00:00', date) as "[timestamp]" FROM "{}"
+            WHERE date IS NOT NULL
             ORDER BY id DESC LIMIT 1
         """.format(chat_id)) as cursor:
             res = await cursor.fetchone()
@@ -325,9 +326,12 @@ class AsyncDB:
     async def insert_message(self, chat_id: int, m: Message):
         """Insert message record."""
         assert(self.conn)
-        await self.conn.execute("""INSERT OR IGNORE INTO "{}"
+        await self.conn.execute("""INSERT INTO "{}"
             (id, type, date, edit_date, content, reply_to, user_id, media_id)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?)""".format(chat_id),
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id, reply_to) DO UPDATE SET
+                date=excluded.date,
+                edit_date=excluded.edit_date""".format(chat_id),
                     (
                     m.id,
                     m.type,

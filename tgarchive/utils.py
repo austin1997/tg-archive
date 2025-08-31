@@ -7,6 +7,30 @@ from telethon import utils, client
 from telethon.tl import types
 import telethon.tl.custom
 
+import asyncio
+import itertools
+
+class OrderedPriorityQueue:
+    def __init__(self, maxsize=0):
+        self._queue = asyncio.PriorityQueue(maxsize)
+        self._counter = itertools.count() # Used for unique tie-breaker
+
+    def put_nowait(self, priority, item):
+        count = next(self._counter)
+        self._queue.put_nowait((priority, count, item))
+
+    async def put(self, priority, item):
+        # Add a unique sequence number as a tie-breaker
+        count = next(self._counter)
+        await self._queue.put((priority, count, item))
+
+    async def get(self):
+        priority, _, item = await self._queue.get()
+        return (priority, item)
+    
+    def empty(self):
+        return self._queue.empty()
+
 def get_media_id(msg: telethon.tl.custom.Message):
     media_id = None
     if getattr(msg, "photo", None) is not None:
