@@ -13,6 +13,9 @@ cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
 print(cur.fetchall())
 
 # %%
+cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='1385489711';")
+print(cur.fetchall())
+# %%
 cur.execute('DROP TABLE "1125392550_new";')
 print(cur.fetchall())
 cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
@@ -73,9 +76,12 @@ for id, _ in chats:
     copy_table(cur, target_name, temp_name)
     drop_table(cur, target_name)
     rename_table(cur, temp_name, target_name)
+conn.commit()
 print("Done")
 
 # %%
 cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
 print(cur.fetchall())
+# %%
+conn.close()
 # %%

@@ -116,7 +116,16 @@ class AsyncDB:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.close()
+        """Commit changes on successful exit, then close the connection."""
+        if self.conn:
+            if exc_type is None:
+                # If there was no exception, commit the transaction.
+                await self.conn.commit()
+            else:
+                # An exception occurred, so we don't want to save changes.
+                # aiosqlite will roll back automatically on close.
+                pass
+            await self.close()
 
     async def connect(self):
         """Initialize the SQLite DB connection."""
@@ -324,25 +333,26 @@ class AsyncDB:
                     )
 
     async def insert_message(self, chat_id: int, m: Message):
-        """Insert message record."""
+        """Insert message record. Only update date and edit_date if primary key exists."""
         assert(self.conn)
-        await self.conn.execute("""INSERT INTO "{}"
+        sql = f"""INSERT INTO "{chat_id}"
             (id, type, date, edit_date, content, reply_to, user_id, media_id)
             VALUES(?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id, reply_to) DO UPDATE SET
                 date=excluded.date,
-                edit_date=excluded.edit_date""".format(chat_id),
-                    (
-                    m.id,
-                    m.type,
-                    m.date.strftime("%Y-%m-%d %H:%M:%S"),
-                    m.edit_date.strftime(
-                        "%Y-%m-%d %H:%M:%S") if m.edit_date else None,
-                    m.content,
-                    m.reply_to,
-                    m.user.id,
-                    m.media_id)
-                    )
+                edit_date=excluded.edit_date
+        """
+        params = (
+            m.id,
+            m.type,
+            m.date.strftime("%Y-%m-%d %H:%M:%S"),
+            m.edit_date.strftime("%Y-%m-%d %H:%M:%S") if m.edit_date else None,
+            m.content,
+            m.reply_to,
+            m.user.id,
+            m.media_id
+        )
+        await self.conn.execute(sql, params)
     
     async def insert_pending_message(self, chat_id: int, message_id: int):
         """Insert pending message record."""
