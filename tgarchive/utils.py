@@ -30,6 +30,9 @@ class OrderedPriorityQueue:
     
     def empty(self):
         return self._queue.empty()
+    
+    async def join(self):
+        await self._queue.join()
 
 def get_media_id(msg: telethon.tl.custom.Message):
     media_id = None

@@ -106,7 +106,7 @@ class Sync:
         media_queue = utils.OrderedPriorityQueue(1)
         chat_ids = []
         for group in self.config["groups"]:
-            chat_ids.append(await self._get_group_entity(group).id)
+            chat_ids.append((await self._get_group_entity(group)).id)
             chat_queue.put_nowait((group, from_id))
         
         pending_msgs = await self.db.get_pending_messages()
@@ -147,7 +147,7 @@ class Sync:
         finally:
             await asyncio.gather(*msg_tasks)
             for _ in enumerate(media_tasks):
-                await media_queue.put(None)
+                await media_queue.put(1, None)
             await asyncio.gather(*media_tasks)
             await msg_queue.join()
             await media_queue.join()
