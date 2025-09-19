@@ -30,7 +30,7 @@ CREATE table IF NOT EXISTS "{}" (
     date TIMESTAMP,
     edit_date TIMESTAMP,
     content TEXT,
-    reply_to INTEGER,
+    reply_to INTEGER NOT NULL DEFAULT -1,
     user_id INTEGER,
     media_id INTEGER,
     FOREIGN KEY(user_id) REFERENCES users(id),
@@ -145,6 +145,7 @@ class AsyncDB:
     async def close(self):
         """Close the database connection."""
         if self.conn:
+            await self.conn.commit()
             await self.conn.close()
             self.conn = None
 

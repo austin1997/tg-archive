@@ -12,7 +12,7 @@ from telethon import TelegramClient
 from tgarchive import db, utils
 
 class MessageWorker:
-    def __init__(self, output_queue: utils.OrderedPriorityQueue, input_queue: asyncio.Queue, pending_msgs: utils.OrderedPriorityQueue, client: TelegramClient, database: db.AsyncDB, config: dict):
+    def __init__(self, output_queue: utils.OrderedPriorityQueue, input_queue: asyncio.Queue, pending_msgs: asyncio.Queue, client: TelegramClient, database: db.AsyncDB, config: dict):
         self.output_queue = output_queue
         self.input_queue = input_queue
         self.pending_msgs = pending_msgs
@@ -172,7 +172,7 @@ class MessageWorker:
             date=None if remove_date else msg.date,
             edit_date=msg.edit_date,
             content=sticker if sticker else msg.raw_text,
-            reply_to=msg.reply_to_msg_id if msg.reply_to and msg.reply_to.reply_to_msg_id else None,
+            reply_to=msg.reply_to_msg_id if msg.reply_to and msg.reply_to.reply_to_msg_id else -1,
             user=await self._get_user(await msg.get_sender(), await msg.get_chat()),
             media_id=media_id
         )
