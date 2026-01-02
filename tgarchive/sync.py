@@ -117,10 +117,12 @@ class Sync:
                 # await self.db.remove_pending_message(chat_id, message_id)
 
         chat_ids = []
-        flash_chat_id = (await self._get_group_entity(self.config["flash_media_user"])).id
-        logging.info("Listening flash_chat_id: {}".format(flash_chat_id))
+        for name in self.config.get("special_users", {}).keys():
+            entity = await self._get_group_entity(name)
+            self.config["special_users"].update({name: entity.id})
+        logging.info("Special users: {}".format(self.config.get("special_users", {})))
         msg_workers: Dict[int, worker.MessageWorker] = {}
-        for group_name, group_info in self.config["groups"].items():
+        for group_info in self.config["groups"]:
             logging.info("Setting up group: {}".format(group_info))
             media_dir = os.path.abspath(group_info['media_dir'])
             if not os.path.exists(media_dir):
@@ -130,7 +132,7 @@ class Sync:
                 entity = await self._get_group_entity(name)
                 chat_id = entity.id
                 chat_ids.append(chat_id)
-                msg_workers[chat_id] = worker.MessageWorker(media_queue, chat_id, msg_queue, flash_chat_id, self.client, self.db, self.config, media_dir, group_info['download_media'])
+                msg_workers[chat_id] = worker.MessageWorker(media_queue, chat_id, msg_queue, self.client, self.db, self.config, media_dir, group_info['download_media'])
                 
         logging.info("Watching chat_ids: {}".format(chat_ids))
         downloader = FastTelethon.ParallelTransferrer(self.client)

@@ -5,6 +5,8 @@ import traceback
 from PIL import Image
 import asyncio
 import logging
+import re
+
 import telethon
 import telethon.tl.custom
 import telethon.tl.types
@@ -12,11 +14,11 @@ from telethon import TelegramClient
 from tgarchive import db, utils
 
 class MessageWorker:
-    def __init__(self, output_queue: utils.OrderedPriorityQueue, chat_id: int, pending_msgs: asyncio.Queue, flash_chat_id: int, client: TelegramClient, database: db.AsyncDB, config: dict, media_dir: str, download_media: bool=True):
+    def __init__(self, output_queue: utils.OrderedPriorityQueue, chat_id: int, pending_msgs: asyncio.Queue, client: TelegramClient, database: db.AsyncDB, config: dict, media_dir: str, download_media: bool=True):
         self.output_queue = output_queue
         self.chat_id = chat_id
         self.pending_msgs = pending_msgs
-        self.flash_chat_id = flash_chat_id
+        self.special_users = config.get("special_users", {})
         self.client = client
         self.db = database
         self.config = config
@@ -118,8 +120,7 @@ class MessageWorker:
         # Media.
         sticker = None
         media_id = None
-        # logging.info("sender_id: {} vs flash_chat_id: {}".format(msg.sender_id, self.flash_chat_id))
-        if msg.sender_id == self.flash_chat_id and msg.button_count == 1:
+        if msg.sender_id == self.special_users.get("flash_photo_cat_bot", 0) and msg.button_count == 1:
             logging.info("Got flash media message")
             sent_msg = await self.client.send_message((await msg.get_sender()), "https://t.me/c/2042004332/" + str(msg.id))
             try:
@@ -127,8 +128,18 @@ class MessageWorker:
             except Exception as e:
                 traceback.print_exc()
                 logging.info("Failed to get one flash media")
-            await self.db.insert_message_link(msg.chat_id, msg.id, self.flash_chat_id, sent_msg.id)
-        elif msg.media:
+            await self.db.insert_message_link(msg.chat_id, msg.id, msg.sender_id, sent_msg.id)
+        elif msg.sender_id == self.special_users.get("ntmjmqbot", 0) and msg.media is None:
+            logging.info("Got ntmjmqbot media None message sender_id: {}".format(msg.sender_id))
+            msg = await self.client.get_messages(await msg.get_input_chat(), ids=msg.id)
+            if msg.button_count >= 1:
+                try:
+                    await asyncio.sleep(8)
+                    await msg.click(text=re.compile(r".*全部.*").match)
+                except Exception as e:
+                    traceback.print_exc()
+                    logging.info("Failed to click bottum in ntmjmqbot message_id: {}".format(msg.id))
+        if msg.media:
             # If it's a sticker, get the alt value (unicode emoji).
             if isinstance(msg.media, telethon.tl.types.MessageMediaDocument) and \
                 not isinstance(msg.media.document, telethon.tl.types.DocumentEmpty) and \
