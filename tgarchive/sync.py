@@ -6,9 +6,10 @@ import os
 import tempfile
 import shutil
 import time
+from tokenize import group
 import traceback
 import asyncio
-from typing import Tuple
+from typing import Tuple, Dict
 
 from PIL import Image
 from telethon import TelegramClient, errors
@@ -37,17 +38,14 @@ class Sync:
 
         self.client = self.new_client(session_file, config)
 
-        media_dir = os.path.abspath(self.config["media_dir"])
-        base_dir = os.path.basename(media_dir)
-        parent_dir = os.path.dirname(media_dir)
-        media_tmp_dir = os.path.join(parent_dir, base_dir + "_tmp")
-        if not os.path.exists(media_dir):
-            os.mkdir(media_dir)
-
+        # media_dir = os.path.abspath(self.config["media_dir"])
+        # base_dir = os.path.basename(media_dir)
+        # parent_dir = os.path.dirname(media_dir)
+        # media_tmp_dir = os.path.join(parent_dir, base_dir + "_tmp")
+        media_tmp_dir = os.path.abspath(tempfile.mkdtemp(prefix="tgarchive_"))
         if os.path.exists(media_tmp_dir):
             shutil.rmtree(media_tmp_dir)
         os.mkdir(media_tmp_dir)
-        self.media_dir = media_dir
         self.media_tmp_dir = media_tmp_dir
         self.downloader = None
 
@@ -104,10 +102,6 @@ class Sync:
         chat_queue = asyncio.Queue()
         msg_queue = asyncio.Queue(16)
         media_queue = utils.OrderedPriorityQueue(1)
-        chat_ids = []
-        for group in self.config["groups"]:
-            chat_ids.append((await self._get_group_entity(group)).id)
-            chat_queue.put_nowait((group, from_id))
         
         pending_msgs = await self.db.get_pending_messages()
         for chat_id, message_id in pending_msgs:
@@ -122,32 +116,61 @@ class Sync:
                 logging.error("error getting pending message chat_id: {}, msg_id: {}: {}".format(chat_id, message_id, e))
                 # await self.db.remove_pending_message(chat_id, message_id)
 
+        chat_ids = []
+        flash_chat_id = (await self._get_group_entity(self.config["flash_media_user"])).id
+        logging.info("Listening flash_chat_id: {}".format(flash_chat_id))
+        msg_workers: Dict[int, worker.MessageWorker] = {}
+        for group_name, group_info in self.config["groups"].items():
+            logging.info("Setting up group: {}".format(group_info))
+            media_dir = os.path.abspath(group_info['media_dir'])
+            if not os.path.exists(media_dir):
+                os.mkdir(media_dir)
+            for name in group_info['names']:
+                logging.info("Setting up group name: {}".format(name))
+                entity = await self._get_group_entity(name)
+                chat_id = entity.id
+                chat_ids.append(chat_id)
+                msg_workers[chat_id] = worker.MessageWorker(media_queue, chat_id, msg_queue, flash_chat_id, self.client, self.db, self.config, media_dir, group_info['download_media'])
+                
+        logging.info("Watching chat_ids: {}".format(chat_ids))
         downloader = FastTelethon.ParallelTransferrer(self.client)
-        msg_workers = [worker.MessageWorker(media_queue, chat_queue, msg_queue, self.client, self.db, self.config) for _ in range(len(self.config["groups"])) ]
-        media_worker = worker.MediaWorker(media_queue, self.client, self.db, downloader, self.media_dir, self.media_tmp_dir)
-        msg_tasks = []
+        # msg_workers = [worker.MessageWorker(media_queue, chat_id, msg_queue, self.client, self.db, self.config) for chat_id in chat_ids ]
+        media_worker = worker.MediaWorker(media_queue, self.client, self.db, downloader, self.media_tmp_dir)
+        msg_tasks: Dict[int, asyncio.Task] = {}
         media_tasks = []
         try:
-            for w in msg_workers:
-                msg_tasks.append(asyncio.create_task(w.run()))
+            for id, w in msg_workers.items():
+                msg_tasks[id] = asyncio.create_task(w.run())
             media_tasks.append(asyncio.create_task(media_worker.run()))
 
-            async def new_message_handler(event: telethon.events.NewMessage.Event):
-                if event.chat_id in chat_ids:
+            async def incoming_message_handler(event: telethon.events.NewMessage.Event):
+                # logging.info("New message event: chat_id: {}, msg_id: {}".format(event.chat_id, event.message.id))
+                if event.chat_id is None:
+                    return
+                if event.chat_id < 0:
+                    chat_id = -int(event.chat_id) - 1000000000000
+                else:
+                    chat_id = event.chat_id
+                if chat_id in chat_ids:
                     logging.info("New message received in chat_id: {}, msg_id: {}".format(event.chat_id, event.message.id))
-                    await msg_workers[0].handle_message(event.message, False, 0, True)
+                    msg = await msg_workers[chat_id]._get_message(event.message, 0, not msg_tasks[chat_id].done())
+                    if msg is not None:
+                        # Insert the records into DB.
+                        await self.db.insert_user(msg.user)
+                        await self.db.insert_message(chat_id, msg)
 
-            self.client.add_event_handler(new_message_handler, telethon.events.NewMessage)
+            self.client.add_event_handler(incoming_message_handler, telethon.events.NewMessage(incoming=True))
+            # self.client.add_event_handler(outgoing_message_handler, telethon.events.NewMessage(outgoing=True))
         except Exception as e:
-            for task in msg_tasks:
+            for task in msg_tasks.values():
                 task.cancel()
             for task in media_tasks:
                 task.cancel()
             raise e
         finally:
-            await asyncio.gather(*msg_tasks)
-            for _ in enumerate(media_tasks):
-                await media_queue.put(1, None)
+            await asyncio.gather(*msg_tasks.values())
+            # for _ in enumerate(media_tasks):
+            #     await media_queue.put(1, None)
             await asyncio.gather(*media_tasks)
             await msg_queue.join()
             await media_queue.join()
@@ -236,7 +259,7 @@ class Sync:
             date=msg.date,
             edit_date=msg.edit_date,
             content=sticker if sticker else msg.raw_text,
-            reply_to=msg.reply_to_msg_id if msg.reply_to and msg.reply_to.reply_to_msg_id else None,
+            reply_to=msg.reply_to_msg_id if msg.reply_to and msg.reply_to.reply_to_msg_id else -1,
             user=await self._get_user(await msg.get_sender(), await msg.get_chat()),
             media_id=media_id
         )

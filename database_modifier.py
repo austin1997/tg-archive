@@ -35,7 +35,7 @@ def create_new_table(cur: sqlite3.Cursor, name: str):
             date TIMESTAMP,
             edit_date TIMESTAMP,
             content TEXT,
-            reply_to INTEGER,
+            reply_to INTEGER NOT NULL DEFAULT -1,
             user_id INTEGER,
             media_id INTEGER,
             FOREIGN KEY(user_id) REFERENCES users(id),
@@ -82,6 +82,46 @@ print("Done")
 # %%
 cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
 print(cur.fetchall())
+
+# %%
+# Find the ids that have multiple NULL reply_to entries:
+query = """
+SELECT *
+FROM "{}"
+WHERE reply_to IS NULL AND id == 211471
+"""
+cur.execute(query.format("1385489711"))
+print(cur.fetchall())
+# %%
+# Delete duplicates
+def delete_duplicates(cur: sqlite3.Cursor, table_name: str):
+    template = """
+    DELETE FROM "{}"
+    WHERE reply_to IS NULL
+    AND rowid NOT IN (
+        SELECT MIN(rowid) -- Or MAX(rowid), depending on which one you want to keep
+        FROM "{}"
+        WHERE reply_to IS NULL
+        GROUP BY id
+        HAVING COUNT(*) > 1
+    );
+    """
+    cur.execute(template.format(table_name, table_name))
+    conn.commit()
+
+def update_table(cur: sqlite3.Cursor, table_name: str):
+    template = """
+    UPDATE "{}"
+    SET reply_to = -1
+    WHERE reply_to IS NULL;
+    """
+    cur.execute(template.format(table_name))
+    conn.commit()
+
+for id, _ in chats:
+    table_name = str(id)
+    delete_duplicates(cur, table_name)
+    update_table(cur, table_name)
 # %%
 conn.close()
 # %%

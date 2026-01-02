@@ -12,14 +12,17 @@ from telethon import TelegramClient
 from tgarchive import db, utils
 
 class MessageWorker:
-    def __init__(self, output_queue: utils.OrderedPriorityQueue, input_queue: asyncio.Queue, pending_msgs: asyncio.Queue, client: TelegramClient, database: db.AsyncDB, config: dict):
+    def __init__(self, output_queue: utils.OrderedPriorityQueue, chat_id: int, pending_msgs: asyncio.Queue, flash_chat_id: int, client: TelegramClient, database: db.AsyncDB, config: dict, media_dir: str, download_media: bool=True):
         self.output_queue = output_queue
-        self.input_queue = input_queue
+        self.chat_id = chat_id
         self.pending_msgs = pending_msgs
+        self.flash_chat_id = flash_chat_id
         self.client = client
         self.db = database
         self.config = config
         self.group_entity = None
+        self.media_dir = media_dir
+        self.download_media = download_media
 
     async def get_group_entity(self, group):
         logging.info(f"Handling group {group}")
@@ -41,38 +44,39 @@ class MessageWorker:
 
             await self.handle_message(message, True)
 
-        while not self.input_queue.empty():
-            ids = None
-            (group, from_id) = await self.input_queue.get()
-            await self.get_group_entity(group)
-            if self.group_entity is None:
-                continue
-            group_id = self.group_entity.id
-            if isinstance(self.group_entity, telethon.tl.types.Channel):
-                await self.db.create_chat_table(group_id, self.group_entity.title)
-            else:
-                await self.db.create_chat_table(group_id, self.group_entity.username)
+        ids = None
+        group = self.chat_id
+        from_id = None
+        await self.get_group_entity(group)
+        if self.group_entity is None:
+            logging.warning(f"Group entity is None for group {group}")
+            return
+        group_id = self.group_entity.id
+        if isinstance(self.group_entity, telethon.tl.types.Channel):
+            await self.db.create_chat_table(group_id, self.group_entity.title)
+        else:
+            await self.db.create_chat_table(group_id, self.group_entity.username)
 
-            if ids is not None:
-                last_id, last_date = (ids, None)
-                logging.info("fetching message id={}".format(ids))
-            elif from_id is not None:
-                last_id, last_date = (from_id, None)
-                logging.info("fetching from last message id={}".format(last_id))
-            else:
-                last_id, last_date = await self.db.get_last_message_id(group_id)
-                logging.info("fetching from last message id={} ({})".format(
-                    last_id, last_date))
-            
-            # last_id = None
-            n = 0
-            async for msg in self.client.iter_messages(self.group_entity, reverse=True, offset_id=last_id if last_id is not None else 0, ids=ids):
-                last_date = msg.date
-                n += 1
-                await self.handle_message(msg, True)
-                if n % 1000 == 0:
-                    logging.info("fetched {} messages. last message = {}: {}".format(n, msg.id, last_date))
-            logging.info("{} finished. fetched {} messages. last message = {}".format(group_id, n, last_date))
+        if ids is not None:
+            last_id, last_date = (ids, None)
+            logging.info("fetching message id={}".format(ids))
+        elif from_id is not None:
+            last_id, last_date = (from_id, None)
+            logging.info("fetching from last message id={}".format(last_id))
+        else:
+            last_id, last_date = await self.db.get_last_message_id(group_id)
+            logging.info("fetching from last message id={} ({})".format(
+                last_id, last_date))
+        
+        # last_id = None
+        n = 0
+        async for msg in self.client.iter_messages(self.group_entity, reverse=True, offset_id=last_id if last_id is not None else 0, ids=ids):
+            last_date = msg.date
+            n += 1
+            await self.handle_message(msg, True)
+            if n % 1000 == 0:
+                logging.info("fetched {} messages in chat {}. last message = {}: {}".format(n, msg.chat_id, msg.id, last_date))
+        logging.info("{} finished. fetched {} messages. last message = {}".format(group_id, n, last_date))
 
     async def handle_message(self, msg: telethon.tl.custom.Message, search_replies: bool, priority: int = 1, remove_date: bool = False):
         if msg is None:
@@ -90,7 +94,7 @@ class MessageWorker:
                     pass
                 except Exception as e:
                     logging.error("Error while handling reply message: {}".format(e))
-                    raise e
+                    # raise e
 
         # Insert the records into DB.
         await self.db.insert_user(message.user)
@@ -114,7 +118,17 @@ class MessageWorker:
         # Media.
         sticker = None
         media_id = None
-        if msg.media:
+        # logging.info("sender_id: {} vs flash_chat_id: {}".format(msg.sender_id, self.flash_chat_id))
+        if msg.sender_id == self.flash_chat_id and msg.button_count == 1:
+            logging.info("Got flash media message")
+            sent_msg = await self.client.send_message((await msg.get_sender()), "https://t.me/c/2042004332/" + str(msg.id))
+            try:
+                await msg.click(0)
+            except Exception as e:
+                traceback.print_exc()
+                logging.info("Failed to get one flash media")
+            await self.db.insert_message_link(msg.chat_id, msg.id, self.flash_chat_id, sent_msg.id)
+        elif msg.media:
             # If it's a sticker, get the alt value (unicode emoji).
             if isinstance(msg.media, telethon.tl.types.MessageMediaDocument) and \
                 not isinstance(msg.media.document, telethon.tl.types.DocumentEmpty) and \
@@ -151,18 +165,19 @@ class MessageWorker:
                     )
                 media_id = 1
                 await self.db.insert_webpage(webpage)
-            elif self.config["download_media"] and \
+            elif self.download_media and \
                 isinstance(msg.media, (telethon.tl.types.MessageMediaPhoto,
                                        telethon.tl.types.MessageMediaDocument,
                                        telethon.tl.types.MessageMediaContact)):
                 media_id = await self._get_media(msg)
                 if media_id is None:
                     logging.warning("Got None media_id in chat_id:{}, msg_id: {}".format(msg.chat_id, msg.id))
-                if media_id is not None and await self.db.get_media(media_id) is None:
+                elif await self.db.get_media(media_id) is None:
                     await self.db.insert_pending_message(msg.chat_id, msg.id)
-                    await self.output_queue.put(priority, msg)
+                    temp = (msg, self.media_dir)
+                    await self.output_queue.put(priority, temp)
                 else:
-                    logging.info("found media id: {} in cache".format(media_id))
+                    logging.info("found media id: {} in cache in chat: {}".format(media_id, msg.chat_id))
             else:
                 logging.info("unknown media type: {}".format(msg.media))
 
@@ -170,7 +185,7 @@ class MessageWorker:
             type=typ,
             id=msg.id,
             date=None if remove_date else msg.date,
-            edit_date=msg.edit_date,
+            edit_date=msg.date if remove_date else msg.edit_date,
             content=sticker if sticker else msg.raw_text,
             reply_to=msg.reply_to_msg_id if msg.reply_to and msg.reply_to.reply_to_msg_id else -1,
             user=await self._get_user(await msg.get_sender(), await msg.get_chat()),
@@ -189,7 +204,7 @@ class MessageWorker:
 
     async def _download_avatar(self, user):
         fname = "avatar_{}.jpg".format(user.id)
-        fpath = os.path.join(self.config["media_dir"], fname)
+        fpath = os.path.join(self.media_dir, fname)
 
         if os.path.exists(fpath):
             return fname
@@ -283,6 +298,6 @@ class MessageWorker:
         return db.Poll(
             chat_id=msg.chat_id,
             message_id=msg.id,
-            title=poll.question,
-            description=json.dumps([a.text for a in poll.answers])
+            title=poll.question.text,
+            description=json.dumps([a.text.text for a in poll.answers])
         )

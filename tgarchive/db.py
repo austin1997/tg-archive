@@ -7,6 +7,7 @@ from datetime import datetime
 import pytz
 from typing import Iterator, List, Optional, Tuple
 import asyncio
+import logging
 
 create_chat_collection_schema = """
 CREATE table IF NOT EXISTS chat (
@@ -80,6 +81,16 @@ CREATE table IF NOT EXISTS webpage (
 );
 """
 
+create_message_link_schema = """
+CREATE table IF NOT EXISTS message_link (
+    from_chat_id INTEGER NOT NULL,
+    from_message_id INTEGER NOT NULL,
+    to_chat_id INTEGER NOT NULL,
+    to_message_id INTEGER NOT NULL,
+    PRIMARY KEY (from_chat_id, from_message_id)
+);
+"""
+
 User = namedtuple(
     "User", ["id", "username", "first_name", "last_name", "tags", "avatar"])
 
@@ -140,6 +151,7 @@ class AsyncDB:
         await self.conn.execute(create_poll_schema)
         await self.conn.execute(create_media_schema)
         await self.conn.execute(create_user_schema)
+        await self.conn.execute(create_message_link_schema)
         await self.conn.execute(create_chat_collection_schema)
 
     async def close(self):
@@ -162,6 +174,7 @@ class AsyncDB:
     async def create_chat_table(self, chat_id: int, title: str):
         """Create a chat table and insert/update chat info."""
         assert(self.conn)
+        logging.info("Creating table for chat_id: {}, title: {}".format(chat_id, title))
         await self.conn.execute(create_chat_schema.format(chat_id))
         await self.conn.execute("""INSERT INTO chat (id, title)
             VALUES(?, ?) ON CONFLICT (id)
@@ -333,6 +346,18 @@ class AsyncDB:
                     w.description)
                     )
 
+    async def insert_message_link(self, from_chat_id: int, from_message_id: int, to_chat_id: int, to_message_id: int):
+        """Insert message link record."""
+        assert(self.conn)
+        await self.conn.execute("""INSERT OR REPLACE INTO message_link
+            (from_chat_id, from_message_id, to_chat_id, to_message_id)
+            VALUES(?, ?, ?, ?)""",
+                    (from_chat_id,
+                    from_message_id,
+                    to_chat_id,
+                    to_message_id)
+                    )
+
     async def insert_message(self, chat_id: int, m: Message):
         """Insert message record. Only update date and edit_date if primary key exists."""
         assert(self.conn)
@@ -346,7 +371,7 @@ class AsyncDB:
         params = (
             m.id,
             m.type,
-            m.date.strftime("%Y-%m-%d %H:%M:%S"),
+            m.date.strftime("%Y-%m-%d %H:%M:%S") if m.date else None,
             m.edit_date.strftime("%Y-%m-%d %H:%M:%S") if m.edit_date else None,
             m.content,
             m.reply_to,

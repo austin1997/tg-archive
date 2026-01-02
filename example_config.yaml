@@ -1,0 +1,11 @@
+groups:
+  group1:
+    names: ["filepan_bot", "Videolink668_bot", "-1003042339323"]
+    from_id: [-1, -1, -1]
+    media_dir: "media_loli"
+    download_media: true
+  group2:
+    names: ["-1001819115659", "https://t.me/luchuzhe888", "-1001385489711", "https://t.me/luchu100", "-1002090533015", "https://t.me/dianchedm"]
+    from_id: [-1, -1, -1, -1, -1, -1]
+    media_dir: "media"
+    download_media: true
