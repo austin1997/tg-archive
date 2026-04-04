@@ -120,25 +120,63 @@ class MessageWorker:
         # Media.
         sticker = None
         media_id = None
-        if msg.sender_id == self.special_users.get("flash_photo_cat_bot", 0) and msg.button_count == 1:
+        if msg.sender_id == self.special_users.get("flash_photo_cat_bot", 0) and msg.button_count > 0:
             logging.info("Got flash media message")
             sent_msg = await self.client.send_message((await msg.get_sender()), "https://t.me/c/2042004332/" + str(msg.id))
             try:
-                await msg.click(0)
+                await msg.click(text=re.compile(r".*查看.*").match)    
             except Exception as e:
                 traceback.print_exc()
                 logging.info("Failed to get one flash media")
             await self.db.insert_message_link(msg.chat_id, msg.id, msg.sender_id, sent_msg.id)
-        elif msg.sender_id == self.special_users.get("ntmjmqbot", 0) and msg.media is None:
-            logging.info("Got ntmjmqbot media None message sender_id: {}".format(msg.sender_id))
+        elif msg.sender_id == self.special_users.get("Gooyo_bot", 0) and msg.media is None:
+            logging.info("Got Gooyo_bot media None message sender_id: {}".format(msg.sender_id))
             msg = await self.client.get_messages(await msg.get_input_chat(), ids=msg.id)
-            if msg.button_count >= 1:
+            if msg is not None and msg.buttons:
                 try:
                     await asyncio.sleep(8)
-                    await msg.click(text=re.compile(r".*全部.*").match)
+                    page_buttons = []
+                    current_page_idx = None
+                    for row in msg.buttons:
+                        for btn in row:
+                            match = re.search(r'\d+', btn.text)
+                            if match:
+                                page_buttons.append(btn)
+                                if match.start() > 0:
+                                    current_page_idx = len(page_buttons) - 1
+
+                    if current_page_idx is not None and current_page_idx < len(page_buttons) - 1:
+                        next_btn = page_buttons[current_page_idx + 1]
+                        await next_btn.click()
+                        logging.info("Clicked next page '{}' in Gooyo_bot message_id: {}".format(
+                            next_btn.text, msg.id))
+                    elif current_page_idx is not None:
+                        logging.info("Already on last page in Gooyo_bot message_id: {}".format(msg.id))
+                    else:
+                        logging.info("Could not find current page button in Gooyo_bot message_id: {}".format(msg.id))
                 except Exception as e:
                     traceback.print_exc()
-                    logging.info("Failed to click bottum in ntmjmqbot message_id: {}".format(msg.id))
+                    logging.info("Failed to click button in Gooyo_bot message_id: {}".format(msg.id))
+        elif msg.sender_id == self.special_users.get("atfileslinksbot", 0) and msg.media is None:
+            logging.info("Got atfileslinksbot media None message sender_id: {}".format(msg.sender_id))
+            msg = await self.client.get_messages(await msg.get_input_chat(), ids=msg.id)
+            if msg is not None and msg.buttons:
+                try:
+                    await msg.click(text=re.compile(r".*加载.*").match)
+                    logging.info("Clicked load button in atfileslinksbot message_id: {}".format(msg.id))
+                except Exception as e:
+                    traceback.print_exc()
+                    logging.info("Failed to click load button in atfileslinksbot message_id: {}".format(msg.id))
+        elif msg.sender_id == self.special_users.get("QQfile_bot", 0) and msg.media is None:
+            logging.info("Got QQfile_bot media None message sender_id: {}".format(msg.sender_id))
+            msg = await self.client.get_messages(await msg.get_input_chat(), ids=msg.id)
+            if msg is not None and msg.buttons:
+                try:
+                    await msg.click(text=re.compile(r".*推送全部.*").match)
+                    logging.info("Clicked load button in QQfile_bot message_id: {}".format(msg.id))
+                except Exception as e:
+                    traceback.print_exc()
+                    logging.info("Failed to click load button in QQfile_bot message_id: {}".format(msg.id))
         if msg.media:
             # If it's a sticker, get the alt value (unicode emoji).
             if isinstance(msg.media, telethon.tl.types.MessageMediaDocument) and \
